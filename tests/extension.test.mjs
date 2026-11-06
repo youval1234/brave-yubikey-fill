@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import "../extension/field.js";
+import { matchingAccounts } from "../extension/matching.js";
 
 const { probe, fill: fillField, markClick } = globalThis.yubiKeyFillField;
 
@@ -8,6 +9,27 @@ const site = "https://login.example.test";
 const tab = { id: 7, windowId: 4, url: site + "/challenge" };
 const binding = { device: "test-device", id: "ab" };
 const code = "012345";
+
+test("suggests the Amazon account on the exact Amazon origin", () => {
+  const accounts = [{ label: "GitHub · demo" }, { label: "Amazon · demo" }];
+  assert.deepEqual(matchingAccounts("https://www.amazon.com", accounts), [1]);
+  for (const origin of [
+    "https://www.amazon.com.attacker.test", "https://amazon.attacker.test",
+    "https://attacker-amazon.com", "https://www.amazon.com:444",
+  ]) assert.deepEqual(matchingAccounts(origin, accounts), []);
+});
+
+test("returns every matching account so the user can resolve ambiguity", () => {
+  const accounts = [{ label: "Google · Demo A" }, { label: "Amazon" }, { label: "Google · Demo B" }];
+  assert.deepEqual(matchingAccounts("https://accounts.google.com", accounts), [0, 2]);
+});
+
+test("recognizes an issuer that explicitly names the host or origin", () => {
+  const accounts = [{ label: "Example.test · demo" }, { label: "https://example.test:444 · demo" }];
+  assert.deepEqual(matchingAccounts("https://example.test", accounts), [0]);
+  assert.deepEqual(matchingAccounts("https://example.test:444", accounts), [1]);
+  assert.deepEqual(matchingAccounts("https://sub.example.test", accounts), []);
+});
 
 function listener() {
   const callbacks = new Set();
