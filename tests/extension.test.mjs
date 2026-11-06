@@ -92,9 +92,20 @@ test("only requests the approved credential and targets the original document", 
 
 test("inline discovery reports eligibility without calling the helper or exposing account metadata", async () => {
   reset();
-  state.binding = { ...binding, prompt: true };
+  state.binding = { ...binding, prompt: true, touchRequired: false };
   assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, sender), { ok: true });
   assert.deepEqual(events, []);
+});
+
+test("only a saved no-touch pairing opts out of touch at the helper", async () => {
+  reset();
+  state.binding = { ...binding, prompt: true, touchRequired: false };
+  const result = await handlePrompt({ kind: "prompt-fill", id: "untrusted" }, sender);
+  assert.equal(result.ok, true);
+  assert.deepEqual(events.find(([type]) => type === "request")[1], {
+    op: "code", device: binding.device, id: binding.id, requireTouch: false,
+  });
+  assert.ok(events.some(([type]) => type === "fill"));
 });
 
 test("inline fill rejects foreign senders, opaque origins, nested frames, cached pages and unapproved ports", async () => {
@@ -152,6 +163,7 @@ test("navigation, switching tabs, lost focus and revoked approval block the fill
     () => { state.current.url = site + "/next"; },
     () => { state.focused = false; },
     () => { state.binding = undefined; },
+    () => { state.binding = { ...binding, touchRequired: false }; },
   ]) {
     reset();
     state.duringTouch = action;

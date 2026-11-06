@@ -12,6 +12,10 @@ let accounts = [];
 let approved = {};
 site.value = httpsOrigin(new URLSearchParams(location.search).get("site")) || "";
 
+function accountLabel(entry) {
+  return entry.label + (entry.touchRequired === false ? " · No touch" : " · Touch required");
+}
+
 async function releasePermission(origin) {
   const pattern = hostPattern(origin);
   const values = await chrome.storage.local.get(null);
@@ -29,7 +33,7 @@ async function renderSites() {
     const permission = { origins: [hostPattern(origin)] };
     const enabled = value.prompt && await chrome.permissions.contains(permission);
     const item = document.createElement("li");
-    item.textContent = origin + " — " + value.label;
+    item.textContent = origin + " — " + accountLabel(value);
     const toggle = document.createElement("button");
     toggle.textContent = enabled ? "Turn off prompt" : "Enable prompt";
     toggle.addEventListener("click", async () => {
@@ -68,18 +72,27 @@ read.addEventListener("click", async () => {
   status.textContent = "Reading the key. Enter the OATH password if prompted.";
   try {
     ({ accounts } = await requestHost({ op: "accounts" }));
-    for (const [index, entry] of accounts.entries()) {
-      account.add(new Option(entry.label, index));
+    if (accounts.length) {
+      const placeholder = new Option("Choose the matching account", "", true, true);
+      placeholder.disabled = true;
+      account.add(placeholder);
     }
-    account.disabled = save.disabled = !accounts.length;
+    for (const [index, entry] of accounts.entries()) {
+      account.add(new Option(accountLabel(entry), index));
+    }
+    account.disabled = !accounts.length;
     status.textContent = accounts.length
       ? "Choose an account and verify the full login origin before approving."
-      : "No touch-enabled TOTP accounts found on this YubiKey.";
+      : "No time-based authenticator accounts found. Make sure the Windows helper is up to date.";
   } catch (error) {
     status.textContent = error.message;
   } finally {
     read.disabled = false;
   }
+});
+
+account.addEventListener("change", () => {
+  save.disabled = account.value === "";
 });
 
 form.addEventListener("submit", async (event) => {
@@ -90,7 +103,7 @@ form.addEventListener("submit", async (event) => {
     status.textContent = "Enter the exact HTTPS origin, with no path, wildcard or query.";
     return;
   }
-  const entry = accounts[account.selectedIndex];
+  const entry = account.value === "" ? undefined : accounts[Number(account.value)];
   if (!entry) return;
   const key = siteKey(origin);
   if (approved[key]
@@ -107,7 +120,7 @@ form.addEventListener("submit", async (event) => {
   } catch {
     status.textContent = "Could not save the site. Try again.";
   } finally {
-    save.disabled = !accounts.length;
+    save.disabled = account.value === "";
   }
 });
 

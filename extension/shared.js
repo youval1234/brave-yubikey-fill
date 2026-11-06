@@ -19,10 +19,11 @@ export const errors = {
   cancelled: "OATH password entry was cancelled.",
   password: "The YubiKey rejected the OATH password.",
   device: "Connect exactly one YubiKey with USB smart card (CCID) enabled.",
-  touch: "The credential no longer requires touch or is unavailable.",
-  expired: "The code expired. Click again and touch the key promptly.",
-  hardware: "The YubiKey did not return a code. Check the key and touch again.",
-  timeout: "The helper timed out. Click again and touch the key when it flashes.",
+  credential: "This account is unavailable on the connected key. Pair it again in Options.",
+  touch: "This pairing requires touch, but the account's touch policy changed. Review the pairing in Options.",
+  expired: "The code expired. Click again.",
+  hardware: "The YubiKey did not return a code. Check that it is connected and try again.",
+  timeout: "The helper timed out. Click again and touch the key if it flashes.",
   host: "The Windows helper could not start. Check the setup instructions.",
 };
 

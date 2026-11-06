@@ -81,7 +81,7 @@
     waiting = true;
     fillButton.disabled = true;
     fillButton.textContent = "Waiting for YubiKey…";
-    detail.textContent = "Touch the key when it flashes.";
+    detail.textContent = "Reading your key. Touch it if it flashes.";
     position();
     controls.markClick(requestedField);
     let result;

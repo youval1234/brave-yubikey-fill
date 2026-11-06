@@ -69,9 +69,13 @@ export async function fill(tab, inlineDocument, openSetup = false) {
     });
     if (pageChanged || !probe?.result) throw new Error("No single empty one-time-code field was found.");
 
-    await status(tabId, "KEY", "Touch your YubiKey when it flashes. Enter the OATH password if prompted.");
+    await status(tabId, "KEY", "Reading your YubiKey. Touch it if it flashes. Enter the OATH password if prompted.");
     if (pageChanged) throw new Error("The page changed. Try again.");
-    const result = await requestHost({ op: "code", device: binding.device, id: binding.id });
+    const request = { op: "code", device: binding.device, id: binding.id };
+    // Existing pairings were touch-only. Only a newly selected no-touch entry
+    // can opt out, so a changed credential cannot silently downgrade them.
+    if (binding.touchRequired === false) request.requireTouch = false;
+    const result = await requestHost(request);
     if (typeof result.code !== "string" || !/^[0-9]{6,8}$/.test(result.code)
         || !Number.isSafeInteger(result.expiresAt)) throw new Error("The helper returned an invalid code.");
 
@@ -82,7 +86,8 @@ export async function fill(tab, inlineDocument, openSetup = false) {
     const inlineAllowed = !inlineDocument || await canPrompt(origin, currentBinding);
     if (pageChanged || !current.active || !browserWindow.focused || current.url !== tab.url
         || current.pendingUrl || currentBinding?.device !== binding.device
-        || currentBinding?.id !== binding.id || !inlineAllowed) {
+        || currentBinding?.id !== binding.id || currentBinding?.touchRequired !== binding.touchRequired
+        || !inlineAllowed) {
       throw new Error("The page or approval changed. Try again.");
     }
 

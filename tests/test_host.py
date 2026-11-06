@@ -25,24 +25,34 @@ class HostTest(unittest.TestCase):
 
     def test_native_messages_validate_the_exact_schema(self):
         self.assertEqual(read_request(io.BytesIO(frame(self.request()))), self.request())
-        for bad in ({"op": "code"}, {"op": "accounts", "password": "dummy"}, []):
+        request = {**self.request(NO_TOUCH), "requireTouch": False}
+        self.assertEqual(read_request(io.BytesIO(frame(request))), request)
+        for bad in (
+            {"op": "code"}, {"op": "accounts", "password": "dummy"},
+            {**request, "requireTouch": "false"}, {**request, "requireTouch": 0}, [],
+        ):
             with self.assertRaises(HostError):
                 read_request(io.BytesIO(frame(bad)))
         with self.assertRaises(HostError):
             read_request(io.BytesIO(struct.pack("<I", 10) + b"{}"))
 
-    def test_enrollment_only_exposes_touch_enabled_totp_metadata(self):
+    def test_enrollment_lists_totp_metadata_with_and_without_touch(self):
         response = process_request({"op": "accounts"}, self.session)
         self.assertEqual(response, {"ok": True, "accounts": [
-            {"device": DEVICE, "id": TOUCH.id.hex(), "label": "Demo · touch"}
+            {"device": DEVICE, "id": TOUCH.id.hex(), "label": "Demo · touch", "touchRequired": True},
+            {"device": DEVICE, "id": NO_TOUCH.id.hex(), "label": "no-touch", "touchRequired": False},
         ]})
         self.session.calculate_all.assert_called_once_with(timestamp=1)
         self.session.calculate_code.assert_not_called()
 
-    def test_never_calculates_current_codes_for_ineligible_credentials(self):
-        for entry in (NO_TOUCH, COUNTER):
-            with self.assertRaisesRegex(HostError, "touch"):
-                process_request(self.request(entry), self.session)
+    def test_legacy_touch_pairing_cannot_be_downgraded(self):
+        with self.assertRaisesRegex(HostError, "touch"):
+            process_request(self.request(NO_TOUCH), self.session)
+        self.session.calculate_code.assert_not_called()
+
+    def test_counter_based_accounts_are_rejected_even_without_touch(self):
+        with self.assertRaisesRegex(HostError, "credential"):
+            process_request({**self.request(COUNTER), "requireTouch": False}, self.session)
         self.session.calculate_code.assert_not_called()
 
     def test_wrong_key_is_rejected_before_any_credential_query(self):
@@ -57,6 +67,15 @@ class HostTest(unittest.TestCase):
             "ok": True, "code": "012345", "expiresAt": expiry * 1000
         })
         self.session.calculate_code.assert_called_once_with(TOUCH)
+
+    def test_calculates_the_selected_no_touch_account(self):
+        expiry = int(time()) + 20
+        self.session.calculate_code.return_value = Code("012345", expiry - 30, expiry)
+        request = {**self.request(NO_TOUCH), "requireTouch": False}
+        self.assertEqual(process_request(request, self.session), {
+            "ok": True, "code": "012345", "expiresAt": expiry * 1000
+        })
+        self.session.calculate_code.assert_called_once_with(NO_TOUCH)
 
     def test_declines_code_about_to_expire(self):
         expiry = int(time()) + 1

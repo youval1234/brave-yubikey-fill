@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "YubiKey Fill",
-  "version": "0.2.0",
-  "description": "Fill an approved site's one-time code with a touch-enabled YubiKey.",
+  "version": "0.3.0",
+  "description": "Fill an approved site's one-time code from your YubiKey.",
   "minimum_chrome_version": "106",
   "permissions": ["activeTab", "scripting", "storage", "nativeMessaging"],
   "optional_host_permissions": ["https://*/*"],

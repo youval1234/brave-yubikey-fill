@@ -26,7 +26,9 @@ def read_request(stream):
         raise HostError("host")
     if request == {"op": "accounts"}:
         return request
-    if (request.keys() == {"op", "device", "id"} and request["op"] == "code"
+    code_fields = {"op", "device", "id"}
+    if (request.keys() in (code_fields, code_fields | {"requireTouch"}) and request["op"] == "code"
+            and isinstance(request.get("requireTouch", True), bool)
             and isinstance(request["device"], str)
             and re.fullmatch(r"[A-Za-z0-9+/]{22}", request["device"])
             and isinstance(request["id"], str)
@@ -70,19 +72,22 @@ def process_request(request, session):
 
     # LIST omits touch policy. CALCULATE ALL reports it. Use an expired
     # timestamp so unrelated credentials never yield current codes.
-    eligible = sorted(
+    credentials = sorted(
         credential for credential in session.calculate_all(timestamp=1)
-        if credential.touch_required is True and credential.oath_type == OATH_TYPE.TOTP
+        if credential.oath_type == OATH_TYPE.TOTP
     )
     if request["op"] == "accounts":
         return {"ok": True, "accounts": [
             {"device": session.device_id, "id": entry.id.hex(),
-             "label": " · ".join(filter(None, (entry.issuer, entry.name)))}
-            for entry in eligible
+             "label": " · ".join(filter(None, (entry.issuer, entry.name))),
+             "touchRequired": entry.touch_required is True}
+            for entry in credentials
         ]}
 
-    credential = next((entry for entry in eligible if entry.id.hex() == request["id"]), None)
+    credential = next((entry for entry in credentials if entry.id.hex() == request["id"]), None)
     if credential is None:
+        raise HostError("credential")
+    if request.get("requireTouch", True) and credential.touch_required is not True:
         raise HostError("touch")
 
     code = session.calculate_code(credential)
