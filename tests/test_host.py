@@ -1,0 +1,69 @@
+import io
+import struct
+import unittest
+from time import time
+from unittest.mock import Mock
+
+from yubikit.oath import Code, Credential, OATH_TYPE
+
+from host.yubikey_fill_host import HostError, frame, process_request, read_request
+
+
+DEVICE = "A" * 22
+TOUCH = Credential(DEVICE, b"Demo:touch", "Demo", "touch", OATH_TYPE.TOTP, 30, True)
+NO_TOUCH = Credential(DEVICE, b"no-touch", None, "no-touch", OATH_TYPE.TOTP, 30, False)
+COUNTER = Credential(DEVICE, b"counter", None, "counter", OATH_TYPE.HOTP, 0, True)
+
+
+class HostTest(unittest.TestCase):
+    def setUp(self):
+        self.session = Mock(device_id=DEVICE, locked=False)
+        self.session.calculate_all.return_value = {TOUCH: None, NO_TOUCH: None, COUNTER: None}
+
+    def request(self, entry=TOUCH, device=DEVICE):
+        return {"op": "code", "device": device, "id": entry.id.hex()}
+
+    def test_native_messages_validate_the_exact_schema(self):
+        self.assertEqual(read_request(io.BytesIO(frame(self.request()))), self.request())
+        for bad in ({"op": "code"}, {"op": "accounts", "password": "dummy"}, []):
+            with self.assertRaises(HostError):
+                read_request(io.BytesIO(frame(bad)))
+        with self.assertRaises(HostError):
+            read_request(io.BytesIO(struct.pack("<I", 10) + b"{}"))
+
+    def test_enrollment_only_exposes_touch_enabled_totp_metadata(self):
+        response = process_request({"op": "accounts"}, self.session)
+        self.assertEqual(response, {"ok": True, "accounts": [
+            {"device": DEVICE, "id": TOUCH.id.hex(), "label": "Demo · touch"}
+        ]})
+        self.session.calculate_all.assert_called_once_with(timestamp=1)
+        self.session.calculate_code.assert_not_called()
+
+    def test_never_calculates_current_codes_for_ineligible_credentials(self):
+        for entry in (NO_TOUCH, COUNTER):
+            with self.assertRaisesRegex(HostError, "touch"):
+                process_request(self.request(entry), self.session)
+        self.session.calculate_code.assert_not_called()
+
+    def test_wrong_key_is_rejected_before_any_credential_query(self):
+        with self.assertRaisesRegex(HostError, "device"):
+            process_request(self.request(device="B" * 22), self.session)
+        self.session.calculate_all.assert_not_called()
+
+    def test_calculates_only_the_requested_code_and_preserves_leading_zero(self):
+        expiry = int(time()) + 20
+        self.session.calculate_code.return_value = Code("012345", expiry - 30, expiry)
+        self.assertEqual(process_request(self.request(), self.session), {
+            "ok": True, "code": "012345", "expiresAt": expiry * 1000
+        })
+        self.session.calculate_code.assert_called_once_with(TOUCH)
+
+    def test_declines_code_about_to_expire(self):
+        expiry = int(time()) + 1
+        self.session.calculate_code.return_value = Code("012345", expiry - 30, expiry)
+        with self.assertRaisesRegex(HostError, "expired"):
+            process_request(self.request(), self.session)
+
+
+if __name__ == "__main__":
+    unittest.main()

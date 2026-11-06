@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "YubiKey Fill",
+  "version": "0.1.0",
+  "description": "Fill an approved site's one-time code with a touch-enabled YubiKey.",
+  "minimum_chrome_version": "106",
+  "permissions": ["activeTab", "scripting", "storage", "nativeMessaging"],
+  "background": { "service_worker": "worker.js", "type": "module" },
+  "action": { "default_title": "Fill YubiKey code" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "incognito": "not_allowed",
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+Y" }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YubiKey Fill settings</title>
+<link rel="stylesheet" href="options.css">
+<main>
+  <h1>YubiKey Fill</h1>
+  <p>Pair an exact HTTPS login origin with a touch-enabled account on your YubiKey.</p>
+  <form id="pair">
+    <label for="site">HTTPS login origin</label>
+    <input id="site" type="url" placeholder="https://login.example.com" required>
+    <button id="read" type="button">Read YubiKey accounts</button>
+    <label for="account">YubiKey account</label>
+    <select id="account" required disabled></select>
+    <button id="save" disabled>Approve site</button>
+  </form>
+  <p id="status" role="status" aria-live="polite"></p>
+  <h2>Approved sites</h2>
+  <ul id="sites"></ul>
+</main>
+<script type="module" src="options.js"></script>
+</html>
