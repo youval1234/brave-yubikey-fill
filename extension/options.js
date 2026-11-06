@@ -1,30 +1,64 @@
-import { httpsOrigin, requestHost, siteKey } from "./shared.js";
+import { hostPattern, httpsOrigin, requestHost, siteKey } from "./shared.js";
 
 const form = document.querySelector("#pair");
 const site = document.querySelector("#site");
 const account = document.querySelector("#account");
 const read = document.querySelector("#read");
 const save = document.querySelector("#save");
+const inline = document.querySelector("#inline");
 const status = document.querySelector("#status");
 const sites = document.querySelector("#sites");
 let accounts = [];
+let approved = {};
+site.value = httpsOrigin(new URLSearchParams(location.search).get("site")) || "";
+
+async function releasePermission(origin) {
+  const pattern = hostPattern(origin);
+  const values = await chrome.storage.local.get(null);
+  const stillUsed = Object.entries(values).some(([key, value]) =>
+    key.startsWith("site:") && value.prompt && hostPattern(key.slice(5)) === pattern);
+  if (!stillUsed) await chrome.permissions.remove({ origins: [pattern] });
+}
 
 async function renderSites() {
-  const values = await chrome.storage.local.get(null);
-  sites.replaceChildren();
-  for (const [key, value] of Object.entries(values).sort()) {
+  approved = await chrome.storage.local.get(null);
+  const rows = [];
+  for (const [key, value] of Object.entries(approved).sort()) {
     if (!key.startsWith("site:")) continue;
+    const origin = key.slice(5);
+    const permission = { origins: [hostPattern(origin)] };
+    const enabled = value.prompt && await chrome.permissions.contains(permission);
     const item = document.createElement("li");
-    item.textContent = key.slice(5) + " — " + value.label;
+    item.textContent = origin + " — " + value.label;
+    const toggle = document.createElement("button");
+    toggle.textContent = enabled ? "Turn off prompt" : "Enable prompt";
+    toggle.addEventListener("click", async () => {
+      toggle.disabled = true;
+      try {
+        const prompt = !enabled && await chrome.permissions.request(permission);
+        const { [key]: current } = await chrome.storage.local.get(key);
+        if (current) await chrome.storage.local.set({ [key]: { ...current, prompt } });
+        if (!prompt || !current) await releasePermission(origin);
+        status.textContent = prompt && current
+          ? "Prompt enabled. Refresh the login page and focus its code field."
+          : enabled ? "Inline prompt turned off." : "Site access was not granted.";
+      } catch {
+        status.textContent = "Could not change site access. Try again.";
+      } finally {
+        await renderSites();
+      }
+    });
     const remove = document.createElement("button");
     remove.textContent = "Remove";
     remove.addEventListener("click", async () => {
       await chrome.storage.local.remove(key);
+      await releasePermission(origin);
       await renderSites();
     });
-    item.append(remove);
-    sites.append(item);
+    item.append(toggle, remove);
+    rows.push(item);
   }
+  sites.replaceChildren(...rows);
 }
 
 read.addEventListener("click", async () => {
@@ -59,11 +93,22 @@ form.addEventListener("submit", async (event) => {
   const entry = accounts[account.selectedIndex];
   if (!entry) return;
   const key = siteKey(origin);
-  if ((await chrome.storage.local.get(key))[key]
+  if (approved[key]
       && !confirm("Replace the approved account for " + origin + "?")) return;
-  await chrome.storage.local.set({ [key]: entry });
-  status.textContent = "Approved " + origin + ".";
-  await renderSites();
+  save.disabled = true;
+  try {
+    const prompt = inline.checked && await chrome.permissions.request({ origins: [hostPattern(origin)] });
+    await chrome.storage.local.set({ [key]: { ...entry, prompt } });
+    if (!prompt) await releasePermission(origin);
+    status.textContent = prompt
+      ? "Approved. Refresh the login page and focus its code field."
+      : "Approved for the toolbar button or shortcut. You can enable the inline prompt below.";
+    await renderSites();
+  } catch {
+    status.textContent = "Could not save the site. Try again.";
+  } finally {
+    save.disabled = !accounts.length;
+  }
 });
 
 await renderSites();

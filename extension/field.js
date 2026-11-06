@@ -1,36 +1,74 @@
-// Chrome serializes this function into the extension's isolated world.
-export function otpField(url, marker, code, expiresAt) {
-  const slot = "__braveYubiKeyFillField";
-  if (location.href !== url || window.top !== window || document.visibilityState !== "visible") {
-    delete globalThis[slot];
-    return false;
-  }
-  const candidates = [...document.querySelectorAll('input[autocomplete~="one-time-code" i]')]
-    .filter((input) => ["text", "tel", "number", "password"].includes(input.type)
-      && !input.matches(":disabled, [readonly]")
-      && !input.closest("[inert], [aria-hidden='true']")
-      && input.getClientRects().length > 0
-      && getComputedStyle(input).visibility === "visible"
-      && (input.maxLength < 0 || input.maxLength >= 6));
+(() => {
+  // This state lives in Brave's isolated world and is shared with the prompt.
+  if (globalThis.yubiKeyFillField) return;
+  let pending;
+  let clicked;
+  const selector = [
+    'input[autocomplete~="one-time-code" i]',
+    'input#auth-mfa-otpcode[name="otpCode"]',
+    'form#unified-otp-form input#ap_otp_code[name="otpCode"]',
+  ].join(", ");
 
-  const input = candidates.length === 1 ? candidates[0] : null;
-  // An explicit form destination must also stay on the approved origin.
-  const validDestination = input && (!input.form
-    || new URL(input.form.action, location.href).origin === location.origin);
-  if (!code) {
-    delete globalThis[slot];
-    if (!validDestination || input.value) return false;
-    globalThis[slot] = { marker, input };
+  function sameOriginAction(value) {
+    try {
+      const url = new URL(value || location.href, document.baseURI || location.href);
+      return url.origin === location.origin && !url.username && !url.password;
+    } catch {
+      return false;
+    }
+  }
+
+  function field() {
+    if (window.top !== window || document.visibilityState !== "visible") return null;
+    const candidates = [...document.querySelectorAll(selector)].filter((input) => {
+      const style = getComputedStyle(input);
+      return ["text", "tel", "number", "password"].includes(input.type)
+        && !input.matches(":disabled, [readonly]")
+        && !input.closest("[inert], [aria-hidden='true']")
+        && input.getClientRects().length > 0
+        && input.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) !== false
+        && style.visibility === "visible" && style.opacity !== "0"
+        && (input.maxLength < 0 || input.maxLength >= 6);
+    });
+    const input = candidates.length === 1 ? candidates[0] : null;
+    if (!input || input.value) return null;
+    const form = input.form;
+    if (form) {
+      // Named form controls can shadow form.action and even form.getAttribute.
+      const attr = Element.prototype.getAttribute;
+      if (!sameOriginAction(attr.call(form, "action"))) return null;
+      const overrides = document.querySelectorAll("button[formaction], input[formaction]");
+      if ([...overrides].some((button) => button.form === form
+          && !sameOriginAction(attr.call(button, "formaction")))) return null;
+    }
+    return input;
+  }
+
+  function probe(url, marker, inline) {
+    const anchor = clicked;
+    clicked = null;
+    pending = null;
+    const input = location.href === url && field();
+    if (!input || (inline && anchor !== input)) return false;
+    pending = { marker, input };
     return true;
   }
-  const original = globalThis[slot];
-  delete globalThis[slot];
-  if (!validDestination || original?.marker !== marker || original.input !== input
-      || input.value || Date.now() + 3000 >= expiresAt
-      || (input.maxLength >= 0 && input.maxLength < code.length)) return false;
 
-  // Use the native setter so the framework can observe the input event.
-  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, code);
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  return true;
-}
+  function fill(url, marker, code, expiresAt) {
+    const original = pending;
+    pending = null;
+    const input = location.href === url && field();
+    if (!input || original?.marker !== marker || original.input !== input
+        || Date.now() + 3000 >= expiresAt
+        || (input.maxLength >= 0 && input.maxLength < code.length)) return false;
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, code);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  }
+
+  globalThis.yubiKeyFillField = {
+    field, probe, fill,
+    markClick(input) { clicked = input; },
+    clearClick() { clicked = null; },
+  };
+})();

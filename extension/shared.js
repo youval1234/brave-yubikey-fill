@@ -13,6 +13,7 @@ export function httpsOrigin(value) {
 }
 
 export const siteKey = (origin) => "site:" + origin;
+export const hostPattern = (origin) => "https://" + new URL(origin).hostname + "/*";
 
 export const errors = {
   cancelled: "OATH password entry was cancelled.",
