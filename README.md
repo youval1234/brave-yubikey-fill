@@ -12,7 +12,7 @@ Version 0.7.1 reduces page work and retained memory: the DOM observer runs only 
 
 Private windows are supported using a separate extension worker. After reloading v0.7.1, open the extension's Details at `brave://extensions` and enable **Allow in Private** once; Brave controls this opt-in. Existing normal-window pairings remain available, but automatic fills in private windows do not save new site/account pairings. Chromium shares extension `storage.local` between normal and private windows, so explicitly changing settings in the extension's options still changes shared settings. Private access uses the same HTTPS, hover, trusted-click, field and origin checks.
 
-The toolbar popup offers an optional **Refresh key accounts** action. **Manage pairings** is available for advanced use. Normal login use needs only a click on the inline offer.
+The toolbar popup offers an optional **Refresh key accounts** action to reread the key's account list after adding or removing an account. Automatic matching also refreshes expired metadata as needed; this button is not a required sign-in step. A password-locked OATH application may ask for its password when using this action. **Manage pairings** is available for advanced use. Normal login use needs only a click on the inline offer.
 
 ## Security and compatibility
 

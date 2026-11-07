@@ -1,11 +1,21 @@
 import { httpsOrigin, SUGGESTIONS } from "./shared.js";
 const status = document.getElementById("status");
-status.textContent = "Automatic OTP offers are active. On a recognized login page, click Fill code beside the code field.";
+const title = document.getElementById("status-title");
+const guide = document.getElementById("guide");
+const hint = document.getElementById("hint");
 const read = document.getElementById("read");
-read.textContent = "Refresh key accounts";
+const readLabel = document.getElementById("read-label");
+function feedback(heading, message, state) {
+  title.textContent = heading;
+  status.textContent = message;
+  guide.dataset.state = state;
+  hint.hidden = true;
+}
 read.addEventListener("click", async () => {
   read.disabled = true;
-  status.textContent = "Refreshing your key accounts…";
+  readLabel.textContent = "Refreshing accounts…";
+  guide.setAttribute("aria-busy", "true");
+  feedback("Reading your key…", "Keep your YubiKey connected while its accounts refresh.", "loading");
   try {
     const result = await chrome.runtime.sendMessage({ kind: "panel-discover" });
     if (!result?.ok) throw new Error(result?.message || "Could not read the key.");
@@ -15,10 +25,12 @@ read.addEventListener("click", async () => {
     if (tab?.id && httpsOrigin(tab.url)) {
       await chrome.tabs.sendMessage(tab.id, { kind: "pairing-updated" }, { frameId: 0 }).catch(() => {});
     }
-    status.textContent = "Accounts refreshed. Return to the login page.";
+    feedback("You're all set.", "Accounts refreshed. Return to your login page and hover over its code field.", "success");
   } catch (error) {
-    status.textContent = error.message;
+    feedback("Let's check your key.", error.message, "error");
   } finally {
+    guide.setAttribute("aria-busy", "false");
+    readLabel.textContent = "Refresh key accounts";
     read.disabled = false;
   }
 });

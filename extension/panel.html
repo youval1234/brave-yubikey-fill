@@ -3,15 +3,28 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>YubiKey Fill</title>
-<link rel="stylesheet" href="options.css">
 <link rel="stylesheet" href="panel.css">
+<body>
 <main>
-  <h1><img src="icons/key-48.png" width="32" height="32" alt=""> YubiKey Fill</h1>
-  <p id="status" role="status" aria-live="polite"></p>
-  <div class="actions">
-    <button id="read">Refresh key accounts</button>
-  </div>
-  <a href="options.html" target="_blank" rel="noopener">Manage pairings</a>
+  <header class="brand">
+    <span class="brand-icon"><img src="icons/key-128.png" width="40" height="40" alt=""></span>
+    <div><h1>YubiKey Fill</h1><p class="tagline">Your key. A simpler sign-in.</p></div>
+  </header>
+  <section class="guide" id="guide" aria-labelledby="status-title" role="status" aria-live="polite" aria-atomic="true">
+    <div class="eyebrow"><span class="status-dot" aria-hidden="true"></span>Automatic OTP offers</div>
+    <h2 id="status-title">Ready when you are.</h2>
+    <p id="status">Hover over a code field on a recognized site, then click <strong>Fill code</strong>.</p>
+    <div class="hint" id="hint"><span aria-hidden="true">01</span> Hover <i aria-hidden="true">→</i> <span aria-hidden="true">02</span> Click to fill</div>
+  </section>
+  <button id="read" type="button" title="Optional: reread your YubiKey's account list after adding or removing accounts.">
+    <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 6.2A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.8"/></svg>
+    <span id="read-label">Refresh key accounts</span>
+  </button>
+  <a class="settings" href="options.html" target="_blank" rel="noopener">
+    <span>Manage pairings</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+  </a>
+  <footer><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg>Your secrets stay on your key.</footer>
 </main>
 <script type="module" src="panel.js"></script>
+</body>
 </html>
