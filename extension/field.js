@@ -7,6 +7,8 @@
     'input[autocomplete~="one-time-code" i]',
     'input#auth-mfa-otpcode[name="otpCode"]',
     'form#unified-otp-form input#ap_otp_code[name="otpCode"]',
+    'input[name="otp" i], input[name="otpCode" i], input[name="totp" i]',
+    'input[name="verificationCode" i], input[name="twoFactorCode" i], input#otp',
   ].join(", ");
 
   function sameOriginAction(value) {

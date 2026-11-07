@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import "../extension/field.js";
-import { matchingAccounts } from "../extension/matching.js";
+import { matchingAccounts, suggestionsForAccounts } from "../extension/matching.js";
 
 const { probe, fill: fillField, markClick } = globalThis.yubiKeyFillField;
 
@@ -31,6 +31,15 @@ test("recognizes an issuer that explicitly names the host or origin", () => {
   assert.deepEqual(matchingAccounts("https://sub.example.test", accounts), []);
 });
 
+test("discovery requests exact sites only for issuers present on the key", () => {
+  const accounts = [{ label: "Amazon · demo" }, { label: "Some service" }, { label: "login.example.test · demo" }];
+  assert.deepEqual(suggestionsForAccounts(accounts), {
+    "https://amazon.com": [accounts[0]],
+    "https://www.amazon.com": [accounts[0]],
+    "https://login.example.test": [accounts[2]],
+  });
+});
+
 function listener() {
   const callbacks = new Set();
   return {
@@ -44,7 +53,7 @@ let events;
 let state;
 function reset() {
   events = [];
-  state = { binding, current: { ...tab, active: true }, focused: true, probe: true, permitted: true };
+  state = { binding, suggestions: {}, current: { ...tab, active: true }, focused: true, probe: true, permitted: true };
   globalThis.chrome = {
     action: {
       onClicked: listener(),
@@ -54,7 +63,12 @@ function reset() {
     storage: {
       onChanged: listener(),
       local: {
-        get: async (key) => key === "site:" + site ? { [key]: state.binding } : {},
+        get: async (key) => {
+          if (key === "site:" + site) return { [key]: state.binding };
+          if (key === "recognized-sites") return { [key]: state.suggestions };
+          return {};
+        },
+        set: async (values) => { state.binding = values["site:" + site]; },
         setAccessLevel: async () => {},
       },
     },
@@ -69,6 +83,7 @@ function reset() {
       onActivated: listener(),
     },
     windows: { get: async () => ({ focused: state.focused }) },
+    commands: { onCommand: listener() },
     scripting: {
       executeScript: async ({ target, args, files }) => {
         if (files) return [{ documentId: "original-document" }];
@@ -117,6 +132,43 @@ test("inline discovery reports eligibility without calling the helper or exposin
   state.binding = { ...binding, prompt: true, touchRequired: false };
   assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, sender), { ok: true });
   assert.deepEqual(events, []);
+});
+
+test("first-use offers are private until a valid enrollment click", async () => {
+  reset();
+  state.binding = undefined;
+  state.suggestions[site] = [{ ...binding, label: "Demo account", touchRequired: false }];
+  assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, sender), { ok: true, setup: "unique" });
+  assert.deepEqual(events, []);
+  assert.equal(state.binding, undefined);
+
+  state.probe = false;
+  assert.equal((await handlePrompt({ kind: "prompt-enroll" }, sender)).ok, false);
+  assert.equal(events.some(([type]) => type === "request"), false);
+  state.probe = true;
+  assert.equal((await handlePrompt({ kind: "prompt-enroll" }, sender)).ok, true);
+  assert.equal(state.binding.id, binding.id);
+  assert.equal(state.binding.prompt, true);
+});
+
+test("enrollment refuses ambiguous suggestions, revoked permission and a changed match", async () => {
+  for (const problem of ["ambiguous", "revoked", "changed"]) {
+    reset();
+    state.binding = undefined;
+    state.suggestions[site] = [binding];
+    if (problem === "ambiguous") {
+      state.suggestions[site].push({ ...binding, id: "different-account" });
+      assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, sender), { ok: true, setup: "choose" });
+    }
+    if (problem === "revoked") state.permitted = false;
+    if (problem === "changed") {
+      state.duringTouch = () => { state.suggestions[site] = [{ ...binding, id: "different-account" }]; };
+    }
+    assert.equal((await handlePrompt({ kind: "prompt-enroll" }, sender)).ok, false);
+    assert.equal(events.some(([type]) => type === "request"), problem === "changed");
+    assert.equal(events.some(([type]) => type === "fill"), false);
+    assert.equal(state.binding, undefined);
+  }
 });
 
 test("only a saved no-touch pairing opts out of touch at the helper", async () => {

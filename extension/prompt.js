@@ -3,6 +3,7 @@
   globalThis.yubiKeyFillPrompt = true;
   const controls = globalThis.yubiKeyFillField;
   let anchor, host, shadow, detail, fillButton, observer, dismissTimer;
+  let setupMode, discoveryObserver, scanFrame;
   let dismissed;
   let waiting = false;
   let generation = 0;
@@ -78,15 +79,17 @@
         || controls.field() !== anchor) return;
     const currentHost = host;
     const requestedField = anchor;
+    const mode = setupMode;
     waiting = true;
     fillButton.disabled = true;
-    fillButton.textContent = "Waiting for YubiKey…";
-    detail.textContent = "Reading your key. Touch it if it flashes.";
+    fillButton.textContent = mode === "choose" ? "Opening account picker…" : "Waiting for YubiKey…";
+    if (mode !== "choose") detail.textContent = "Reading your key. Touch it if it flashes.";
     position();
     controls.markClick(requestedField);
     let result;
     try {
-      result = await chrome.runtime.sendMessage({ kind: "prompt-fill" });
+      const kind = mode === "choose" ? "prompt-choose" : mode === "unique" ? "prompt-enroll" : "prompt-fill";
+      result = await chrome.runtime.sendMessage({ kind });
     } catch {
       result = null;
     } finally {
@@ -94,6 +97,10 @@
       waiting = false;
     }
     if (currentHost !== host) return;
+    if (mode === "choose" && result?.ok) {
+      close();
+      return;
+    }
     detail.textContent = result?.message || "Reload this page and try again.";
     fillButton.textContent = result?.ok ? "Code filled" : "Try again";
     fillButton.disabled = Boolean(result?.ok);
@@ -105,8 +112,9 @@
     }
   }
 
-  function show(input) {
+  function show(input, setup) {
     anchor = input;
+    setupMode = setup;
     host = document.createElement("div");
     host.style.setProperty("all", "initial", "important");
     host.style.setProperty("position", "fixed", "important");
@@ -137,7 +145,7 @@
     }
 
     const copy = element("div", "copy");
-    detail = element("div", "detail", "Use your security key");
+    detail = element("div", "detail", setup ? "Match found for " + location.hostname : "Use your security key");
     detail.setAttribute("role", "status");
     copy.append(element("div", "title", "YubiKey Fill"), detail);
     const dismiss = element("button", "dismiss", "×");
@@ -148,7 +156,8 @@
       dismissed = input;
       close();
     });
-    fillButton = element("button", "fill", "Fill code");
+    fillButton = element("button", "fill",
+      setup === "choose" ? "Choose account" : setup === "unique" ? "Approve & fill" : "Fill code");
     fillButton.type = "button";
     fillButton.addEventListener("click", requestCode);
     header.append(logo, copy, dismiss);
@@ -162,16 +171,46 @@
     }
   }
 
-  async function offer() {
-    if (host || waiting || document.activeElement?.tagName !== "INPUT"
-        || document.activeElement === dismissed) return;
-    const input = document.activeElement;
+  function stopDiscovery() {
+    discoveryObserver?.disconnect();
+    discoveryObserver = undefined;
+    if (scanFrame) cancelAnimationFrame(scanFrame);
+    scanFrame = 0;
+  }
+
+  function offerReady(setup, requireFocus) {
+    const input = controls.field();
+    if (host || waiting || !input || input === dismissed
+        || (requireFocus && document.activeElement !== input)) return false;
+    stopDiscovery();
+    show(input, setup);
+    return true;
+  }
+
+  async function offer(automatic = false) {
+    if (host || waiting || (!automatic && (document.activeElement?.tagName !== "INPUT"
+        || document.activeElement === dismissed))) return;
     const attempt = ++generation;
     const url = location.href;
     try {
       const result = await chrome.runtime.sendMessage({ kind: "prompt-status" });
-      if (result?.ok && attempt === generation && location.href === url
-          && document.activeElement === input && controls.field() === input) show(input);
+      if (!result?.ok || attempt !== generation || location.href !== url) return;
+      if (offerReady(result.setup, !automatic) || !automatic || discoveryObserver) return;
+      discoveryObserver = new MutationObserver(() => {
+        if (scanFrame || document.hidden) return;
+        scanFrame = requestAnimationFrame(() => {
+          scanFrame = 0;
+          if (location.href === url) offerReady(result.setup, false);
+          else {
+            stopDiscovery();
+            void offer(true);
+          }
+        });
+      });
+      discoveryObserver.observe(document.documentElement, {
+        subtree: true, childList: true, attributes: true,
+        attributeFilter: ["autocomplete", "name", "id", "hidden", "disabled"],
+      });
     } catch {
       // The extension may have been reloaded in Brave.
     }
@@ -197,12 +236,21 @@
   }, true);
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) close();
-    else void offer();
+    else void offer(true);
   });
-  window.addEventListener("pagehide", close);
-  window.addEventListener("pageshow", offer);
-  window.addEventListener("focus", offer);
+  window.addEventListener("pagehide", () => {
+    stopDiscovery();
+    close();
+  });
+  window.addEventListener("pageshow", () => { void offer(true); });
+  window.addEventListener("focus", () => { void offer(true); });
   window.addEventListener("scroll", position, { capture: true, passive: true });
   window.addEventListener("resize", position);
-  void offer();
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    if (message?.kind !== "pairing-updated" || sender.id !== chrome.runtime.id) return;
+    stopDiscovery();
+    close();
+    void offer(true);
+  });
+  void offer(true);
 })();

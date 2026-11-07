@@ -1,4 +1,4 @@
-import { hostPattern, httpsOrigin, requestHost, siteKey } from "./shared.js";
+import { hostPattern, httpsOrigin, requestHost, siteKey, SUGGESTIONS } from "./shared.js";
 import { matchingAccounts } from "./matching.js";
 
 const form = document.querySelector("#pair");
@@ -23,7 +23,9 @@ async function releasePermission(origin) {
   const values = await chrome.storage.local.get(null);
   const stillUsed = Object.entries(values).some(([key, value]) =>
     key.startsWith("site:") && value.prompt && hostPattern(key.slice(5)) === pattern);
-  if (!stillUsed) await chrome.permissions.remove({ origins: [pattern] });
+  const discoveryUsesHost = Object.keys(values[SUGGESTIONS] || {})
+    .some((origin) => hostPattern(origin) === pattern);
+  if (!stillUsed && !discoveryUsesHost) await chrome.permissions.remove({ origins: [pattern] });
 }
 
 async function renderSites() {

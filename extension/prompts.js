@@ -1,4 +1,4 @@
-import { httpsOrigin, hostPattern } from "./shared.js";
+import { httpsOrigin, hostPattern, SUGGESTIONS } from "./shared.js";
 
 const SCRIPT_ID = "yubikey-inline";
 let pendingSync = Promise.resolve();
@@ -8,10 +8,12 @@ async function sync() {
     chrome.storage.local.get(null),
     chrome.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] }),
   ]);
-  const patterns = [...new Set(Object.entries(values).flatMap(([key, value]) => {
+  const origins = Object.entries(values).flatMap(([key, value]) => {
     const origin = key.startsWith("site:") ? httpsOrigin(key.slice(5)) : null;
-    return origin && value?.prompt === true ? [hostPattern(origin)] : [];
-  }))].sort();
+    return origin && value?.prompt === true ? [origin] : [];
+  });
+  origins.push(...Object.keys(values[SUGGESTIONS] || {}));
+  const patterns = [...new Set(origins.map(hostPattern))].sort();
   const granted = await Promise.all(patterns.map((origin) =>
     chrome.permissions.contains({ origins: [origin] })));
   const matches = patterns.filter((_, index) => granted[index]);

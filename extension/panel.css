@@ -1,0 +1,10 @@
+body { width: 330px; margin: 0; }
+main { margin: 0; padding: 14px; }
+h1 { font-size: 18px; margin: 0 0 12px; }
+p { margin: 8px 0; }
+#origin { font-weight: 650; overflow-wrap: anywhere; }
+select { display: block; width: 100%; margin: 5px 0 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0; }
+#enable, #fill, #use { background: #c6a9ff; color: #211436; border: 1px solid #7755a7; border-radius: 7px; }
+#domains { max-height: 150px; overflow-y: auto; padding-inline-start: 1.5rem; }
+#status, a, summary { font-size: 13px; }
