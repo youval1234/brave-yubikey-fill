@@ -112,7 +112,19 @@ function reset() {
 }
 
 reset();
-const { fill, handlePrompt } = await import("../extension/worker.js");
+const { fill, handlePrompt, injectOpenTabs } = await import("../extension/worker.js");
+
+test("updates inject the prompt into existing HTTPS tabs without reloading their pages", async () => {
+  reset();
+  const injected = [];
+  chrome.tabs.query = async (query) => {
+    assert.deepEqual(query, { url: ["https://*/*"] });
+    return [{ id: 7 }, { id: 8, incognito: true }];
+  };
+  chrome.scripting.executeScript = async (request) => { injected.push(request); };
+  await injectOpenTabs();
+  assert.deepEqual(injected, [{ target: { tabId: 7 }, files: ["field.js", "prompt.js"] }]);
+});
 
 const sender = {
   id: "test-extension", url: tab.url, origin: site, frameId: 0,

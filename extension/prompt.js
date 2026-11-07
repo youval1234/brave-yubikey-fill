@@ -1,6 +1,7 @@
 (() => {
-  if (window.top !== window || location.protocol !== "https:" || globalThis.yubiKeyFillPrompt) return;
-  globalThis.yubiKeyFillPrompt = true;
+  const version = chrome.runtime.getManifest().version;
+  if (window.top !== window || location.protocol !== "https:" || globalThis.yubiKeyFillPrompt === version) return;
+  globalThis.yubiKeyFillPrompt = version;
   const controls = globalThis.yubiKeyFillField;
   let anchor, host, shadow, detail, fillButton, observer, dismissTimer;
   let setupMode, discoveryObserver, scanFrame;
@@ -272,7 +273,7 @@
   window.addEventListener("scroll", position, { capture: true, passive: true });
   window.addEventListener("resize", position);
   chrome.runtime.onMessage.addListener((message, sender) => {
-    if (message?.kind !== "pairing-updated" || sender.id !== chrome.runtime.id) return;
+    if (!["pairing-updated", "retry-offer"].includes(message?.kind) || sender.id !== chrome.runtime.id) return;
     stopDiscovery();
     close();
     void offer(true);

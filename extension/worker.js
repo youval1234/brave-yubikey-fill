@@ -190,6 +190,20 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 function removeLegacyRegistration() {
   chrome.scripting.unregisterContentScripts({ ids: ["yubikey-inline"] }).catch(() => {});
 }
-chrome.runtime.onInstalled.addListener(removeLegacyRegistration);
-chrome.runtime.onStartup.addListener(removeLegacyRegistration);
+
+export async function injectOpenTabs() {
+  const tabs = await chrome.tabs.query({ url: ["https://*/*"] });
+  await Promise.allSettled(tabs.filter((tab) => !tab.incognito).map((tab) =>
+    chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["field.js", "prompt.js"] })));
+}
+
+function activateOffers() {
+  removeLegacyRegistration();
+  injectOpenTabs().catch(() => {});
+}
+chrome.runtime.onInstalled.addListener(activateOffers);
+chrome.runtime.onStartup.addListener(activateOffers);
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  chrome.tabs.sendMessage(tabId, { kind: "retry-offer" }, { frameId: 0 }).catch(() => {});
+});
 void chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
