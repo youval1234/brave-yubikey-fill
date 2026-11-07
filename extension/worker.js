@@ -27,7 +27,7 @@ async function suggestions(origin) {
       await chrome.storage.session.set({ inventory: { sites, expires: Date.now() + 60000 } });
       return sites;
     }).catch(async () => {
-      await chrome.storage.session.set({ inventory: { sites: {}, expires: Date.now() + 5000 } });
+      await chrome.storage.session.set({ inventory: { sites: {}, expires: Date.now() + 5000, retry: true } });
       return {};
     }).finally(() => { inventoryRequest = undefined; });
   }
@@ -146,10 +146,12 @@ export async function handlePrompt(message, sender) {
       || !sender.documentId || !sender.tab?.id || sender.tab.incognito) return { ok: false };
   const key = siteKey(origin);
   if (message.kind === "prompt-status") {
-    const [current, browserWindow] = await Promise.all([
-      chrome.tabs.get(sender.tab.id), chrome.windows.get(sender.tab.windowId),
-    ]);
-    if (!current.active || !browserWindow.focused || current.url !== sender.url || current.pendingUrl) return { ok: false };
+    // Showing an offer only reads metadata. Foreground focus is enforced by
+    // fill() when the user clicks, before generating and releasing a code.
+    const current = await chrome.tabs.get(sender.tab.id);
+    if (!current.active || current.url !== sender.url || current.pendingUrl) {
+      return { ok: false, retryAfterMs: 1000 };
+    }
     const { [key]: binding } = await chrome.storage.local.get(key);
     if (binding) return { ok: Boolean(await canPrompt(origin, binding)) };
     if (!await chrome.permissions.contains({ origins: [hostPattern(origin)] })) return { ok: false };
@@ -159,7 +161,8 @@ export async function handlePrompt(message, sender) {
       ok: true, setup: "choose",
       choices: matches.map((entry) => entry.label.replace(/([\w.+-])[\w.+-]*@/g, "$1…@")),
     };
-    return { ok: false };
+    const { inventory } = await chrome.storage.session.get("inventory");
+    return inventory?.retry ? { ok: false, retryAfterMs: 5000 } : { ok: false };
   }
   if (message.kind === "prompt-fill" || message.kind === "prompt-enroll") {
     return fill({ ...sender.tab, url: sender.url }, sender.documentId, message.kind === "prompt-enroll", message.choice);

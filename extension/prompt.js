@@ -1,13 +1,24 @@
 (() => {
   const version = chrome.runtime.getManifest().version;
   if (window.top !== window || location.protocol !== "https:" || globalThis.yubiKeyFillPrompt === version) return;
+  globalThis.yubiKeyFillDispose?.();
   globalThis.yubiKeyFillPrompt = version;
+  document.documentElement.dataset.yubikeyFillVersion = version;
+  document.documentElement.dataset.yubikeyFillState = "starting";
   const controls = globalThis.yubiKeyFillField;
   let anchor, host, shadow, detail, fillButton, observer, dismissTimer;
-  let setupMode, discoveryObserver, scanFrame;
+  let setupMode, pageObserver, scanFrame, retryTimer;
   let dismissed;
   let waiting = false;
   let generation = 0;
+  let checking = false;
+  let scanRequested = false;
+  let disposed = false;
+  const lifetime = new AbortController();
+
+  function listen(target, type, handler, options = {}) {
+    target.addEventListener(type, handler, { ...options, signal: lifetime.signal });
+  }
 
   const styles = new CSSStyleSheet();
   styles.replaceSync(`
@@ -36,6 +47,7 @@
     .fill:disabled { background: #413456; color: #e8dcff; cursor: default; }
     button:focus-visible { outline: 2px solid #f2e9ff; outline-offset: 2px; }
   `);
+  document.documentElement.dataset.yubikeyFillState = "watching";
 
   function close() {
     generation++;
@@ -113,6 +125,7 @@
     anchor = input;
     setupMode = setup;
     host = document.createElement("div");
+    host.dataset.yubikeyFillHost = version;
     host.style.setProperty("all", "initial", "important");
     host.style.setProperty("position", "fixed", "important");
     host.style.setProperty("display", "block", "important");
@@ -178,105 +191,129 @@
     }
   }
 
-  function stopDiscovery() {
-    discoveryObserver?.disconnect();
-    discoveryObserver = undefined;
+  function stopWatching() {
+    pageObserver?.disconnect();
+    pageObserver = undefined;
+    clearTimeout(retryTimer);
+    retryTimer = undefined;
     if (scanFrame) cancelAnimationFrame(scanFrame);
     scanFrame = 0;
   }
 
-  function offerReady(setup, requireFocus, choices) {
-    const input = controls.field();
-    if (host || waiting || !input || input === dismissed
-        || (requireFocus && document.activeElement !== input)) return false;
-    stopDiscovery();
-    show(input, setup, choices);
-    return true;
+  function scheduleScan() {
+    if (disposed || waiting || document.hidden) return;
+    if (checking) {
+      scanRequested = true;
+      return;
+    }
+    if (scanFrame) return;
+    scanFrame = requestAnimationFrame(() => {
+      scanFrame = 0;
+      if (host) position();
+      if (!host) void offer();
+    });
   }
 
-  async function offer(automatic = false) {
-    if (host || waiting || (!automatic && (document.activeElement?.tagName !== "INPUT"
-        || document.activeElement === dismissed))) return;
-    const attempt = ++generation;
+  async function offer() {
+    if (disposed || host || waiting || checking || document.hidden) return;
+    const input = controls.field();
+    if (!input || input === dismissed) {
+      document.documentElement.dataset.yubikeyFillState = "waiting-for-field";
+      return;
+    }
+    clearTimeout(retryTimer);
+    checking = true;
+    const attempt = generation;
     const url = location.href;
     try {
-      if (!controls.field()) {
-        if (!discoveryObserver) {
-          discoveryObserver = new MutationObserver(() => {
-            if (scanFrame || document.hidden) return;
-            scanFrame = requestAnimationFrame(() => {
-              scanFrame = 0;
-              if (controls.field()) {
-                stopDiscovery();
-                void offer(true);
-              }
-            });
-          });
-          discoveryObserver.observe(document.documentElement, {
-            subtree: true, childList: true, attributes: true,
-            attributeFilter: ["autocomplete", "name", "id", "hidden", "disabled"],
-          });
-        }
+      document.documentElement.dataset.yubikeyFillState = "checking-key";
+      const result = await chrome.runtime.sendMessage({ kind: "prompt-status" });
+      if (disposed) return;
+      document.documentElement.dataset.yubikeyFillState = result?.ok ? "matched" : "unmatched-or-inactive";
+      if (attempt !== generation || location.href !== url || controls.field() !== input) {
+        scanRequested = true;
         return;
       }
-      const result = await chrome.runtime.sendMessage({ kind: "prompt-status" });
-      if (!result?.ok || attempt !== generation || location.href !== url) return;
-      if (offerReady(result.setup, !automatic, result.choices) || !automatic || discoveryObserver) return;
-      discoveryObserver = new MutationObserver(() => {
-        if (scanFrame || document.hidden) return;
-        scanFrame = requestAnimationFrame(() => {
-          scanFrame = 0;
-          if (location.href === url) offerReady(result.setup, false);
-          else {
-            stopDiscovery();
-            void offer(true);
-          }
-        });
-      });
-      discoveryObserver.observe(document.documentElement, {
-        subtree: true, childList: true, attributes: true,
-        attributeFilter: ["autocomplete", "name", "id", "hidden", "disabled"],
-      });
+      if (result?.ok) show(input, result.setup, result.choices);
+      else if (Number.isFinite(result?.retryAfterMs)) {
+        retryTimer = setTimeout(scheduleScan, Math.max(1000, result.retryAfterMs));
+      }
     } catch {
+      document.documentElement.dataset.yubikeyFillState = "extension-unavailable";
       // The extension may have been reloaded in Brave.
+    } finally {
+      checking = false;
+      if (scanRequested) {
+        scanRequested = false;
+        scheduleScan();
+      }
     }
   }
 
-  document.addEventListener("focusin", (event) => {
-    if (event.target !== anchor && event.target !== host && !waiting) close();
+  function startWatching() {
+    if (disposed || document.hidden) return;
+    if (!pageObserver) {
+      pageObserver = new MutationObserver((records) => {
+        const relevant = records.some((record) => {
+          if (record.target === host) return false;
+          const nodes = [...record.addedNodes, ...record.removedNodes];
+          return !nodes.length || !nodes.every((node) =>
+            node.nodeType === 1 && node.hasAttribute("data-yubikey-fill-host"));
+        });
+        if (relevant) scheduleScan();
+      });
+      pageObserver.observe(document.documentElement, {
+        subtree: true, childList: true, attributes: true,
+        attributeFilter: ["autocomplete", "name", "id", "hidden", "disabled", "class", "style"],
+      });
+    }
+    scheduleScan();
+  }
+
+  listen(document, "focusin", (event) => {
+    if (host && event.target !== anchor && event.target !== host && !waiting) close();
     if (event.target !== dismissed && event.target !== host) dismissed = undefined;
-    void offer();
-  }, true);
-  document.addEventListener("pointerdown", (event) => {
-    if (event.target !== host && event.target !== anchor) close();
-    if (event.target === document.activeElement) void offer();
-  }, true);
-  document.addEventListener("keydown", (event) => {
+    scheduleScan();
+  }, { capture: true });
+  listen(document, "pointerdown", (event) => {
+    if (host && event.target !== host && event.target !== anchor) close();
+    scheduleScan();
+  }, { capture: true });
+  listen(document, "keydown", (event) => {
     if (event.key === "Escape" && host) {
       dismissed = anchor;
       close();
     }
-  }, true);
-  document.addEventListener("input", (event) => {
+  }, { capture: true });
+  listen(document, "input", (event) => {
     if (!waiting && event.target === anchor && anchor.value) close();
-  }, true);
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) close();
-    else void offer(true);
+  }, { capture: true });
+  listen(document, "visibilitychange", () => {
+    if (document.hidden) {
+      stopWatching();
+      close();
+    } else startWatching();
   });
-  window.addEventListener("pagehide", () => {
-    stopDiscovery();
+  listen(window, "pagehide", () => {
+    stopWatching();
     close();
   });
-  window.addEventListener("pageshow", () => { void offer(true); });
-  window.addEventListener("focus", () => { void offer(true); });
-  window.addEventListener("scroll", position, { capture: true, passive: true });
-  window.addEventListener("resize", position);
-  chrome.runtime.onMessage.addListener((message, sender) => {
+  listen(window, "pageshow", startWatching);
+  listen(window, "focus", startWatching);
+  listen(window, "scroll", scheduleScan, { capture: true, passive: true });
+  listen(window, "resize", scheduleScan);
+  const onMessage = (message, sender) => {
     if (!["pairing-updated", "retry-offer"].includes(message?.kind) || sender.id !== chrome.runtime.id) return;
-    stopDiscovery();
     close();
-    void offer(true);
-  });
-  void offer(true);
+    startWatching();
+  };
+  chrome.runtime.onMessage.addListener(onMessage);
+  globalThis.yubiKeyFillDispose = () => {
+    disposed = true;
+    lifetime.abort();
+    chrome.runtime.onMessage.removeListener(onMessage);
+    stopWatching();
+    close();
+  };
+  startWatching();
 })();

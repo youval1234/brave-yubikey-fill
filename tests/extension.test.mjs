@@ -148,6 +148,16 @@ test("inline discovery reports eligibility without calling the helper or exposin
   assert.deepEqual(events, []);
 });
 
+test("a visible login tab can offer fill while another application has focus", async () => {
+  reset();
+  state.binding = { ...binding, prompt: true };
+  state.focused = false;
+  assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, sender), { ok: true });
+  assert.deepEqual(events, []);
+  assert.equal((await handlePrompt({ kind: "prompt-fill" }, sender)).ok, false);
+  assert.equal(events.some(([type]) => type === "request"), false);
+});
+
 test("first-use offers are private until a valid enrollment click", async () => {
   reset();
   state.binding = undefined;
