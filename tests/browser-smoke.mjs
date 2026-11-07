@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
+import { once } from "node:events";
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "yubikey-automatic-test-"));
 const extension = path.resolve("extension");
 const id = createHash("sha256").update(Buffer.from(extension, "utf16le")).digest("hex").slice(0,32).replace(/./g,c=>String.fromCharCode(97+parseInt(c,16)));
@@ -92,6 +93,25 @@ try {
       await page.call("Input.dispatchMouseEvent",{type,x,y,button:"left",clickCount:1});
     }
   }
+  // Count extension work without timing-dependent CPU or heap assertions.
+  const isolated = async (func, args = []) => evaluate(worker,
+    `(async()=>{const [tab]=await chrome.tabs.query({active:true,currentWindow:true});return (await chrome.scripting.executeScript({target:{tabId:tab.id},func:${func},args:${JSON.stringify(args)}}))[0].result;})()`);
+  await visit("https://www.amazon.com/ap/mfa", '<input autocomplete="one-time-code"><div id="noise" style="height:60px">Unrelated content</div><div style="height:60px">Other content</div>');
+  await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "watching"'), "No content script");
+  await isolated(() => {
+    globalThis.workCounts = { fields: 0, frames: 0 };
+    const field = yubiKeyFillField.field, frame = requestAnimationFrame;
+    yubiKeyFillField.field = (...args) => { workCounts.fields++; return field(...args); };
+    globalThis.requestAnimationFrame = (...args) => { workCounts.frames++; return frame(...args); };
+  });
+  await evaluate(page, 'new Promise(resolve=>{let n=0;const timer=setInterval(()=>{document.querySelector("#noise").textContent=String(n++);if(n===60){clearInterval(timer);resolve();}},20);})');
+  for (let n = 0; n < 20; n++) {
+    await page.call("Input.dispatchMouseEvent", {type:"mouseMoved",x:10,y:n%2?40:110});
+  }
+  await pause(100);
+  const idleWork = await isolated(() => ({...workCounts}));
+  console.log("Idle mutation and pointer benchmark:", JSON.stringify(idleWork));
+  assert.deepEqual(idleWork, {fields:0,frames:0}, "Idle pages performed field scans or scheduled frames");
   for(const [url,markup] of [
     ["https://www.amazon.com/ap/mfa",'<form action="/verify"><h1>Two-Step Verification</h1><input id="auth-mfa-otpcode" name="otpCode" type="tel"></form>'],
     ["https://login.nvgs.nvidia.com/v1/security/challenge",'<form action="/verify"><h1>Security Challenge</h1><p>Launch your authentication app and generate a security code.</p><label for="code">Enter code</label><input id="code" placeholder="Please enter code"></form>']
@@ -144,7 +164,23 @@ try {
   await until(hoveredButton, "Offer did not recover when the key became available");
   await evaluate(worker,"backgroundWindow = false");
   await visit("https://www.amazon.com/ap/mfa", '<input autocomplete="one-time-code">');
+  await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "watching"'), "No preview script");
+  await isolated(() => {
+    globalThis.activeObservers = 0;
+    const Observer = MutationObserver;
+    globalThis.MutationObserver = class extends Observer {
+      observe(...args) {
+        super.observe(...args);
+        if (!this.tracked) { this.tracked = true; activeObservers++; }
+      }
+      disconnect() {
+        super.disconnect();
+        if (this.tracked) { this.tracked = false; activeObservers--; }
+      }
+    };
+  });
   const previewButton = await until(hoveredButton, "No hover preview");
+  assert.equal(await isolated(() => activeObservers), 1, "Expected one observer during hover");
   const {object:previewObject} = await page.call("DOM.resolveNode", {backendNodeId:previewButton.backendNodeId});
   const codeText = async () => (await page.call("Runtime.callFunctionOn", {
     objectId:previewObject.objectId,returnByValue:true,
@@ -156,17 +192,23 @@ try {
     objectId:previewObject.objectId,returnByValue:true,
     functionDeclaration:'function(){const r=this.getRootNode().host.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}'
   })).result.value;
-  const shot = await page.call("Page.captureScreenshot", {
-    format:"png",clip:{x:Math.max(0,bounds.x-8),y:Math.max(0,bounds.y-8),width:bounds.width+16,height:bounds.height+16,scale:1},
-  });
-  const previewPath = path.join(profile,"hover-preview.png");
-  fs.writeFileSync(previewPath,Buffer.from(shot.data,"base64"));
-  console.log("Dummy preview screenshot:",previewPath);
+  if (process.env.YUBIKEY_TEST_SCREENSHOT) {
+    const shot = await page.call("Page.captureScreenshot", {
+      format:"png",clip:{x:Math.max(0,bounds.x-8),y:Math.max(0,bounds.y-8),width:bounds.width+16,height:bounds.height+16,scale:1},
+    });
+    fs.writeFileSync(path.resolve(process.env.YUBIKEY_TEST_SCREENSHOT),Buffer.from(shot.data,"base64"));
+  }
   const firstCode = await codeText();
   await until(async () => (await codeText()) !== firstCode, "Preview did not refresh at expiry");
+  // The popup remains interactive when the pointer crosses from input to card.
+  await page.call("Input.dispatchMouseEvent", {type:"mouseMoved",x:bounds.x+30,y:bounds.y+25});
+  await pause(350);
+  assert.ok(await findButton(), "Card closed while the pointer was over it");
   await page.call("Input.dispatchMouseEvent", {type:"mouseMoved",x:0,y:0});
   await pause(350);
   assert.equal(await findButton(),undefined,"Card stayed open after pointer left");
+  assert.equal(await codeText(), "", "Closed card retained its displayed code");
+  assert.equal(await isolated(() => activeObservers), 0, "Observer stayed active after hover ended");
   const stoppedAt = await evaluate(worker,"previews");
   await pause(1100);
   assert.equal(await evaluate(worker,"previews"),stoppedAt,"Preview requests continued after closing");
@@ -175,5 +217,13 @@ try {
   assert.equal(await findButton(),undefined,"Lookalike received offer");
   console.log("Hover-only offers, timed preview refresh, hover-out cleanup, safe fill and login regressions passed.");
 } finally {
-  page?.close();worker?.close();browser.kill();
+  page?.close();worker?.close();
+  if (browser.exitCode === null) {
+    const exited = once(browser, "exit");
+    browser.kill();
+    await exited;
+  }
+  assert.equal(path.dirname(path.resolve(profile)), path.resolve(os.tmpdir()));
+  assert.ok(path.basename(profile).startsWith("yubikey-automatic-test-"));
+  await fs.promises.rm(profile, {recursive:true,force:true,maxRetries:20,retryDelay:100});
 }

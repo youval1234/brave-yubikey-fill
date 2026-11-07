@@ -8,6 +8,10 @@ Load this checkout's `extension` directory at `brave://extensions`. Run `./Insta
 
 Version 0.7 adds hover previews and needs the updated Windows helper. Run the installer, reload the extension and refresh existing login pages. The connected key is discovered when the pointer hovers over a supported field. Account metadata is cached in trusted extension session storage for up to one minute.
 
+Version 0.7.1 reduces page work and retained memory: the DOM observer runs only during a relevant hover, unrelated pointer movement skips field scans, popup styles are created on demand, and closing the card clears its code and DOM references. The native helper is unchanged from 0.7.0; no helper reinstall is needed for this update.
+
+Private windows are supported using a separate extension worker. After reloading v0.7.1, open the extension's Details at `brave://extensions` and enable **Allow in Private** once; Brave controls this opt-in. Existing normal-window pairings remain available, but automatic fills in private windows do not save new site/account pairings. Chromium shares extension `storage.local` between normal and private windows, so explicitly changing settings in the extension's options still changes shared settings. Private access uses the same HTTPS, hover, trusted-click, field and origin checks.
+
 The toolbar popup offers an optional **Refresh key accounts** action. **Manage pairings** is available for advanced use. Normal login use needs only a click on the inline offer.
 
 ## Security and compatibility
@@ -26,3 +30,7 @@ Keep OTP seeds, recovery codes, account labels and site approvals out of Git. Ru
 ## Verify
 
 Run `node --test tests/extension.test.mjs` and `python -m unittest discover -s tests` from an environment with the pinned host requirements. Run `node tests/browser-smoke.mjs` on Windows to test fresh-profile Brave behavior with intercepted Amazon and NVIDIA fixture pages and dummy credentials. The browser test makes no live login attempt.
+
+The browser test also checks idle-page work and observer cleanup, then deletes its temporary profile. Set `YUBIKEY_TEST_SCREENSHOT` to an output PNG path only when a dummy preview screenshot is needed.
+
+Run `node tests/memory-smoke.mjs` for an approximate fresh-profile memory comparison. It uses dummy credentials, reports the fixture page's total JavaScript heap and the isolated Brave process tree's working set, then checks memory after the extension worker has had time to suspend. Browser process measurements include Chromium overhead and shared pages; they are not an exact measurement of extension allocations.

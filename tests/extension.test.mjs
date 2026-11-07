@@ -55,6 +55,7 @@ function reset() {
   events = [];
   state = { binding, suggestions: {}, current: { ...tab, active: true }, focused: true, probe: true, permitted: true };
   globalThis.chrome = {
+    extension: { inIncognitoContext: false },
     action: {
       onClicked: listener(),
       setBadgeText: async () => {},
@@ -124,12 +125,64 @@ test("updates inject the prompt into existing HTTPS tabs without reloading their
   chrome.scripting.executeScript = async (request) => { injected.push(request); };
   await injectOpenTabs();
   assert.deepEqual(injected, [{ target: { tabId: 7 }, files: ["field.js", "prompt.js"] }]);
+  injected.length = 0;
+  chrome.extension.inIncognitoContext = true;
+  await injectOpenTabs();
+  assert.deepEqual(injected, [{ target: { tabId: 8 }, files: ["field.js", "prompt.js"] }]);
 });
 
 const sender = {
   id: "test-extension", url: tab.url, origin: site, frameId: 0,
   documentId: "original-document", documentLifecycle: "active", tab,
 };
+
+test("private windows support preview and fill with the same click and focus checks", async () => {
+  for (const failure of ["none", "click", "focus"]) {
+    reset();
+    chrome.extension.inIncognitoContext = true;
+    const privateTab = { ...tab, incognito: true };
+    const privateSender = { ...sender, tab: privateTab };
+    state.current.incognito = true;
+    state.binding = { ...binding, prompt: true, touchRequired: false };
+    assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, privateSender), { ok: true });
+    assert.equal((await handlePrompt({ kind: "prompt-preview" }, privateSender)).ok, true);
+    events.length = 0;
+    if (failure === "click") state.probe = false;
+    if (failure === "focus") state.focused = false;
+    assert.equal((await handlePrompt({ kind: "prompt-fill" }, privateSender)).ok, failure === "none");
+    assert.equal(events.some(([type]) => type === "request"), failure === "none");
+    assert.equal(events.some(([type]) => type === "fill"), failure === "none");
+  }
+});
+
+test("private first-use fills never persist a new site pairing", async () => {
+  reset();
+  chrome.extension.inIncognitoContext = true;
+  state.current.incognito = true;
+  const privateSender = { ...sender, tab: { ...tab, incognito: true } };
+  state.binding = undefined;
+  state.suggestions[site] = [{ ...binding, touchRequired: false }];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, privateSender), { ok: true, setup: "unique" });
+    assert.equal((await handlePrompt({ kind: "prompt-enroll" }, privateSender)).ok, true);
+    assert.equal(state.binding, undefined);
+  }
+});
+
+test("normal and private workers reject tabs and senders from the other context", async () => {
+  for (const privateWorker of [false, true]) {
+    reset();
+    chrome.extension.inIncognitoContext = privateWorker;
+    state.current.incognito = !privateWorker;
+    state.binding = { ...binding, prompt: true };
+    const foreignTab = { ...tab, incognito: !privateWorker };
+    assert.equal((await fill(foreignTab)).ok, false);
+    assert.equal((await handlePrompt({ kind: "prompt-fill" }, { ...sender, tab: foreignTab })).ok, false);
+    // Check the browser's current tab as well as the sender snapshot.
+    assert.equal((await handlePrompt({ kind: "prompt-fill" }, { ...sender, tab: { ...tab, incognito: privateWorker } })).ok, false);
+    assert.equal(events.some(([type]) => type === "request"), false);
+  }
+});
 
 test("only requests the approved credential and targets the original document", async () => {
   reset();

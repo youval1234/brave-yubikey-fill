@@ -6,7 +6,7 @@
   document.documentElement.dataset.yubikeyFillVersion = version;
   document.documentElement.dataset.yubikeyFillState = "starting";
   const controls = globalThis.yubiKeyFillField;
-  let anchor, host, shadow, detail, fillButton, observer, dismissTimer;
+  let anchor, host, shadow, detail, fillButton, dismissTimer;
   let setupMode, pageObserver, scanFrame, retryTimer;
   let dismissed;
   let waiting = false;
@@ -23,8 +23,11 @@
     target.addEventListener(type, handler, { ...options, signal: lifetime.signal });
   }
 
-  const styles = new CSSStyleSheet();
-  styles.replaceSync(`
+  let styles;
+  function getStyles() {
+    if (styles) return styles;
+    styles = new CSSStyleSheet();
+    styles.replaceSync(`
     :host { all: initial; }
     .card {
       box-sizing: border-box; display: grid; gap: 12px; padding: 13px;
@@ -60,6 +63,8 @@
     .fill:disabled { background: #3b4931; color: #dce8d3; cursor: default; }
     button:focus-visible { outline: 2px solid #bfe58e; outline-offset: 2px; }
   `);
+    return styles;
+  }
   document.documentElement.dataset.yubikeyFillState = "watching";
 
   function close() {
@@ -68,9 +73,14 @@
     clearTimeout(previewTimer);
     clearTimeout(hoverTimer);
     controls.markHover(null);
-    observer?.disconnect();
+    clearTimeout(retryTimer);
+    if (codeDisplay) codeDisplay.textContent = "";
     host?.remove();
     host = anchor = undefined;
+    shadow = detail = fillButton = codeDisplay = countdown = progress = undefined;
+    if (!hoverInput?.isConnected) hoverInput = undefined;
+    if (!dismissed?.isConnected) dismissed = undefined;
+    if (!hoverInput) stopWatching();
   }
 
   async function refreshPreview() {
@@ -90,7 +100,8 @@
       const tick = () => {
         if (host !== currentHost || !hoverInput || document.hidden) return;
         const remaining = result.expiresAt - Date.now();
-        countdown.textContent = Math.max(0, Math.ceil(remaining / 1000)) + "s";
+        const seconds = Math.max(0, Math.ceil(remaining / 1000)) + "s";
+        if (countdown.textContent !== seconds) countdown.textContent = seconds;
         progress.style.transform = "scaleX(" + Math.max(0, Math.min(1, remaining / (result.expiresAt - result.startsAt))) + ")";
         if (remaining <= 0) {
           codeDisplay.textContent = "••• •••";
@@ -119,9 +130,11 @@
     const top = rect.bottom + 8 + height <= window.innerHeight
       ? rect.bottom + 8 : Math.max(8, rect.top - height - 8);
     const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-    host.style.setProperty("width", width + "px", "important");
-    host.style.setProperty("top", top + "px", "important");
-    host.style.setProperty("left", left + "px", "important");
+    for (const [name, value] of [["width", width], ["top", top], ["left", left]]) {
+      if (host.style.getPropertyValue(name) !== value + "px" || host.style.getPropertyPriority(name) !== "important") {
+        host.style.setProperty(name, value + "px", "important");
+      }
+    }
   }
 
   function element(tag, className, text) {
@@ -179,7 +192,7 @@
     host.style.setProperty("z-index", "2147483647", "important");
     host.style.setProperty("width", "292px", "important");
     shadow = host.attachShadow({ mode: "closed" });
-    shadow.adoptedStyleSheets = [styles];
+    shadow.adoptedStyleSheets = [getStyles()];
 
     const card = element("section", "card");
     card.setAttribute("aria-label", "YubiKey Fill");
@@ -243,11 +256,7 @@
     shadow.append(card);
     document.documentElement.append(host);
     position();
-    if (host) {
-      observer = new MutationObserver(position);
-      observer.observe(document.documentElement, { subtree: true, childList: true });
-      if (!choices?.length) void refreshPreview();
-    }
+    if (host && !choices?.length) void refreshPreview();
   }
 
   function stopWatching() {
@@ -260,7 +269,7 @@
   }
 
   function scheduleScan() {
-    if (disposed || waiting || document.hidden) return;
+    if (disposed || document.hidden || (!hoverInput && !host)) return;
     if (checking) {
       scanRequested = true;
       return;
@@ -311,9 +320,10 @@
   }
 
   function startWatching() {
-    if (disposed || document.hidden) return;
+    if (disposed || document.hidden || (!hoverInput && !host)) return;
     if (!pageObserver) {
       pageObserver = new MutationObserver((records) => {
+        if (!hoverInput && !host) return;
         const relevant = records.some((record) => {
           if (record.target === host) return false;
           const nodes = [...record.addedNodes, ...record.removedNodes];
@@ -343,12 +353,14 @@
       controls.markHover(anchor, host);
       return;
     }
+    if (!(event.target instanceof HTMLInputElement)) return;
     const input = controls.field();
     if (event.target !== input || !input) return;
     clearTimeout(leaveTimer);
     hoverInput = input;
     hoverReadyAt = performance.now() + 280;
     controls.markHover(input, host);
+    startWatching();
     clearTimeout(hoverTimer);
     hoverTimer = setTimeout(scheduleScan, 280);
   }, { capture: true });

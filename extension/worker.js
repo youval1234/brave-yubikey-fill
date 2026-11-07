@@ -5,6 +5,10 @@ let filling = false;
 let inventoryRequest;
 let previewing = false;
 
+function sameContext(tab) {
+  return Boolean(tab?.incognito) === Boolean(chrome.extension?.inIncognitoContext);
+}
+
 async function preview(tab, documentId) {
   if (previewing) return { ok: false };
   previewing = true;
@@ -22,7 +26,7 @@ async function preview(tab, documentId) {
         chrome.tabs.get(tab.id), chrome.windows.get(tab.windowId),
         chrome.permissions.contains({ origins: [hostPattern(origin)] }),
       ]);
-      if (!current.active || !browserWindow.focused || current.url !== tab.url || current.pendingUrl || !allowed) return false;
+      if (!sameContext(current) || !current.active || !browserWindow.focused || current.url !== tab.url || current.pendingUrl || !allowed) return false;
       const [probe] = await chrome.scripting.executeScript({
         target, func: (url) => globalThis.yubiKeyFillField?.previewProbe(url), args: [tab.url],
       });
@@ -95,7 +99,7 @@ export async function fill(tab, inlineDocument, enroll = false, choice) {
   chrome.tabs.onActivated.addListener(onActivated);
   try {
     const origin = httpsOrigin(tab.url);
-    if (!origin || tab.incognito) throw new Error("Open an approved HTTPS login page.");
+    if (!origin || !sameContext(tab)) throw new Error("Open an approved HTTPS login page.");
     const key = siteKey(origin);
     const { [key]: savedBinding } = await chrome.storage.local.get(key);
     const matches = enroll && inlineDocument && !savedBinding ? await suggestions(origin) : [];
@@ -109,7 +113,7 @@ export async function fill(tab, inlineDocument, enroll = false, choice) {
       const [current, browserWindow, allowed] = await Promise.all([
         chrome.tabs.get(tabId), chrome.windows.get(tab.windowId), canPrompt(origin, binding),
       ]);
-      if (!allowed || pageChanged || !current.active || !browserWindow.focused
+      if (!sameContext(current) || !allowed || pageChanged || !current.active || !browserWindow.focused
           || current.url !== tab.url || current.pendingUrl) {
         throw new Error("The page or its inline permission changed. Try again.");
       }
@@ -150,7 +154,7 @@ export async function fill(tab, inlineDocument, enroll = false, choice) {
       ? !currentBinding && sameAccount(currentMatches[index], binding)
       : sameAccount(currentBinding, binding);
     const inlineAllowed = !inlineDocument || await canPrompt(origin, enroll ? binding : currentBinding);
-    if (pageChanged || !current.active || !browserWindow.focused || current.url !== tab.url
+    if (!sameContext(current) || pageChanged || !current.active || !browserWindow.focused || current.url !== tab.url
         || current.pendingUrl || !stillApproved || !inlineAllowed) {
       throw new Error("The page or approval changed. Try again.");
     }
@@ -161,7 +165,9 @@ export async function fill(tab, inlineDocument, enroll = false, choice) {
       args: [tab.url, marker, result.code, result.expiresAt],
     });
     if (!filled?.result) throw new Error("The field changed or the code expired. Try again.");
-    if (enroll) {
+    if (enroll && !tab.incognito) {
+      // storage.local is shared with normal windows. A private login must not
+      // leave a persistent record of the site/account pairing.
       // Keep any account explicitly paired in the toolbar while this request was in flight.
       const { [key]: alreadyPaired } = await chrome.storage.local.get(key);
       if (!alreadyPaired) await chrome.storage.local.set({ [key]: binding });
@@ -184,12 +190,12 @@ export async function handlePrompt(message, sender) {
   const origin = httpsOrigin(sender.url);
   if (sender.id !== chrome.runtime.id || !origin || sender.origin !== origin
       || sender.frameId !== 0 || sender.documentLifecycle !== "active"
-      || !sender.documentId || !sender.tab?.id || sender.tab.incognito) return { ok: false };
+      || !sender.documentId || !sender.tab?.id || !sameContext(sender.tab)) return { ok: false };
   // MessageSender.url can describe the document's initial route after a
   // history.pushState/replaceState redirect. Use the browser's current URL
   // and keep the sender's exact origin and documentId as the trust boundary.
   const current = await chrome.tabs.get(sender.tab.id);
-  if (!current.active || httpsOrigin(current.url) !== origin || current.pendingUrl) {
+  if (!sameContext(current) || !current.active || httpsOrigin(current.url) !== origin || current.pendingUrl) {
     return { ok: false, retryAfterMs: 1000 };
   }
   const key = siteKey(origin);
@@ -241,7 +247,7 @@ function removeLegacyRegistration() {
 
 export async function injectOpenTabs() {
   const tabs = await chrome.tabs.query({ url: ["https://*/*"] });
-  await Promise.allSettled(tabs.filter((tab) => !tab.incognito).map((tab) =>
+  await Promise.allSettled(tabs.filter(sameContext).map((tab) =>
     chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["field.js", "prompt.js"] })));
 }
 

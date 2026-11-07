@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YubiKey Fill",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Fill an approved site's one-time code from your YubiKey.",
   "minimum_chrome_version": "106",
   "permissions": ["activeTab", "scripting", "storage", "nativeMessaging"],
@@ -21,7 +21,7 @@
     "default_icon": { "16": "icons/key-16.png", "32": "icons/key-32.png" }
   },
   "options_ui": { "page": "options.html", "open_in_tab": true },
-  "incognito": "not_allowed",
+  "incognito": "split",
   "commands": {
     "fill-code": {
       "description": "Fill the one-time code on the approved site",
