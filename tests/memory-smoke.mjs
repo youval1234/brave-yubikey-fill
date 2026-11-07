@@ -18,7 +18,7 @@ async function connect(url) {
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
   socket.onmessage = ({ data }) => {
     const reply = JSON.parse(data);
-    if (typeof reply.method === "string") events.get(reply.method)?.(reply.params);
+    if (reply.method === "Fetch.requestPaused") events.get("Fetch.requestPaused")?.(reply.params);
     const handler = pending.get(reply.id);
     if (!handler) return;
     pending.delete(reply.id);
