@@ -1,9 +1,24 @@
-// A provider label is only a hint. The user still approves the exact origin.
+// Issuers are hints; match exact reviewed hosts, never a brand substring or
+// an arbitrary country suffix. No location or IP lookup is needed.
+const regionalHosts = (domains, prefixes) => domains.flatMap(domain => prefixes.map(prefix => prefix + domain));
+// Official marketplace/domain references are recorded in docs/REGIONAL-SUPPORT.md.
+const ebayDomains = [
+  "ebay.com", "ebay.ca", "ebay.co.uk", "ebay.com.au", "ebay.at", "ebay.be",
+  "ebay.fr", "ebay.de", "ebay.it", "ebay.nl", "ebay.es", "ebay.ch",
+  "ebay.com.hk", "ebay.ie", "ebay.com.my", "ebay.ph", "ebay.pl", "ebay.com.sg",
+];
+const amazonDomains = [
+  "amazon.com", "amazon.ca", "amazon.com.mx", "amazon.com.br", "amazon.ie",
+  "amazon.es", "amazon.co.uk", "amazon.fr", "amazon.com.be", "amazon.nl",
+  "amazon.de", "amazon.it", "amazon.se", "amazon.co.za", "amazon.pl",
+  "amazon.eg", "amazon.com.tr", "amazon.sa", "amazon.ae", "amazon.in",
+  "amazon.sg", "amazon.com.au", "amazon.co.jp",
+];
 const knownHosts = new Map([
-  ["amazon", ["amazon.com", "www.amazon.com"]],
+  ["amazon", regionalHosts(amazonDomains, ["", "www."])],
   ["discord", ["discord.com", "www.discord.com"]],
   ["electronic arts", ["www.ea.com", "accounts.ea.com", "signin.ea.com"]],
-  ["ebay", ["ebay.com", "www.ebay.com", "signin.ebay.com"]],
+  ["ebay", regionalHosts(ebayDomains, ["", "www.", "signin.", "accounts."])],
   ["etsy", ["etsy.com", "www.etsy.com"]],
   ["epic games", ["www.epicgames.com", "accounts.epicgames.com"]],
   ["github", ["github.com"]],

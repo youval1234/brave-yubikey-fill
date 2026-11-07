@@ -14,7 +14,7 @@
   let checking = false;
   let scanRequested = false;
   let disposed = false;
-  let hoverInput, hoverTimer, leaveTimer, previewTimer;
+  let hoverInput, hoverTarget, hoverTimer, leaveTimer, previewTimer;
   let hoverReadyAt = 0;
   let codeDisplay, countdown, progress;
   const lifetime = new AbortController();
@@ -78,7 +78,7 @@
     host?.remove();
     host = anchor = undefined;
     shadow = detail = fillButton = codeDisplay = countdown = progress = undefined;
-    if (!hoverInput?.isConnected) hoverInput = undefined;
+    if (!hoverInput?.isConnected) hoverInput = hoverTarget = undefined;
     if (!dismissed?.isConnected) dismissed = undefined;
     if (!hoverInput) stopWatching();
   }
@@ -285,7 +285,7 @@
   async function offer() {
     if (disposed || host || waiting || checking || document.hidden || !hoverInput) return;
     const input = controls.field();
-    if (!input || input !== hoverInput || input === dismissed || !input.matches(":hover")
+    if (!input || input !== hoverInput || input === dismissed || !controls.isHovered()
         || performance.now() < hoverReadyAt) {
       document.documentElement.dataset.yubikeyFillState = "waiting-for-field";
       return;
@@ -341,8 +341,8 @@
   }
 
   listen(document, "focusin", (event) => {
-    if (host && event.target !== anchor && event.target !== host && !waiting) close();
-    if (event.target !== dismissed && event.target !== host) dismissed = undefined;
+    if (host && event.target !== host && controls.fieldFor(event.target) !== anchor && !waiting) close();
+    if (dismissed && event.target !== host && controls.fieldFor(event.target) !== dismissed) dismissed = undefined;
     scheduleScan();
   }, { capture: true });
   listen(document, "pointerover", (event) => {
@@ -354,9 +354,11 @@
       return;
     }
     if (!(event.target instanceof HTMLInputElement)) return;
-    const input = controls.field();
-    if (event.target !== input || !input) return;
+    const input = controls.fieldFor(event.target);
+    if (!input) return;
     clearTimeout(leaveTimer);
+    hoverTarget = event.target;
+    if (input === hoverInput && host) return;
     hoverInput = input;
     hoverReadyAt = performance.now() + 280;
     controls.markHover(input, host);
@@ -365,21 +367,21 @@
     hoverTimer = setTimeout(scheduleScan, 280);
   }, { capture: true });
   listen(document, "pointerout", (event) => {
-    if (!event.isTrusted || (event.target !== hoverInput && event.target !== host)) return;
-    if (event.relatedTarget === anchor || event.relatedTarget === host) return;
+    if (!event.isTrusted || (event.target !== hoverTarget && event.target !== host)) return;
+    if (event.relatedTarget === host || (event.relatedTarget && controls.fieldFor(event.relatedTarget) === hoverInput)) return;
     clearTimeout(hoverTimer);
     clearTimeout(leaveTimer);
     leaveTimer = setTimeout(() => {
-      hoverInput = undefined;
+      hoverInput = hoverTarget = undefined;
       close();
     }, 180);
   }, { capture: true });
   listen(window, "blur", () => {
-    hoverInput = undefined;
+    hoverInput = hoverTarget = undefined;
     close();
   });
   listen(document, "pointerdown", (event) => {
-    if (host && event.target !== host && event.target !== anchor) close();
+    if (host && event.target !== host && controls.fieldFor(event.target) !== anchor) close();
     scheduleScan();
   }, { capture: true });
   listen(document, "keydown", (event) => {
@@ -389,7 +391,7 @@
     }
   }, { capture: true });
   listen(document, "input", (event) => {
-    if (!waiting && event.target === anchor && anchor.value) close();
+    if (!waiting && host && event.target instanceof HTMLInputElement && controls.field() !== anchor) close();
   }, { capture: true });
   listen(document, "visibilitychange", () => {
     if (document.hidden) {

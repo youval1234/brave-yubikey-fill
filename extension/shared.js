@@ -1,5 +1,6 @@
 export const HOST = "com.youval1234.brave_yubikey_fill";
 export const SUGGESTIONS = "recognized-sites";
+export const INVENTORY_VERSION = 2;
 
 export function httpsOrigin(value) {
   try {

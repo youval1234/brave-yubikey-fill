@@ -33,11 +33,26 @@ test("recognizes an issuer that explicitly names the host or origin", () => {
 
 test("discovery requests exact sites only for issuers present on the key", () => {
   const accounts = [{ label: "Amazon · demo" }, { label: "Some service" }, { label: "login.example.test · demo" }];
-  assert.deepEqual(suggestionsForAccounts(accounts), {
-    "https://amazon.com": [accounts[0]],
-    "https://www.amazon.com": [accounts[0]],
-    "https://login.example.test": [accounts[2]],
-  });
+  const sites = suggestionsForAccounts(accounts);
+  assert.deepEqual(sites["https://www.amazon.com"], [accounts[0]]);
+  assert.deepEqual(sites["https://www.amazon.co.uk"], [accounts[0]]);
+  assert.deepEqual(sites["https://login.example.test"], [accounts[2]]);
+  assert.equal(sites["https://accounts.google.com"], undefined);
+  assert.equal(sites["https://attacker-amazon.com"], undefined);
+  assert.ok(Object.values(sites).every(entries => entries.every(entry => entry === accounts[0] || entry === accounts[2])));
+});
+
+test("recognizes regional marketplaces without accepting arbitrary country suffixes or subdomains", () => {
+  for (const [label, urls] of [
+    ["eBay · demo", ["https://accounts.ebay.ch", "https://signin.ebay.de", "https://accounts.ebay.co.uk", "https://www.ebay.com.au", "https://accounts.ebay.com.sg"]],
+    ["Amazon · demo", ["https://www.amazon.co.uk", "https://www.amazon.co.jp", "https://www.amazon.de", "https://www.amazon.co.za", "https://www.amazon.ie"]],
+  ]) {
+    for (const url of urls) assert.deepEqual(matchingAccounts(url, [{ label }]), [0]);
+  }
+  for (const url of ["https://accounts.ebay.ch.attacker.test", "https://accounts.ebay.example", "https://seller.ebay.ch",
+    "https://ebay-ch.com", "https://www.amazon.example", "https://www.amazon.de.attacker.test", "https://accounts.ebay.ch:444", "http://accounts.ebay.ch"]) {
+    assert.deepEqual(matchingAccounts(url, [{ label: "eBay" }, { label: "Amazon" }]), []);
+  }
 });
 
 function listener() {
@@ -239,6 +254,26 @@ test("same-document login redirects use the current page URL", async () => {
   assert.ok(events.some(([type]) => type === "fill"));
 });
 
+test("an old domain-map cache is refreshed before matching a regional login", async () => {
+  reset();
+  state.binding = undefined;
+  const origin = "https://accounts.ebay.ch";
+  state.current.url = origin + "/mfaxs/signin";
+  let inventory = { version: 1, sites: {}, expires: Date.now() + 60000 };
+  chrome.storage.session.get = async () => ({ inventory });
+  chrome.storage.session.set = async value => { inventory = value.inventory; };
+  let discoveries = 0;
+  chrome.runtime.sendNativeMessage = async (_host, request) => {
+    assert.equal(request.op, "discover");
+    discoveries++;
+    return { ok: true, accounts: [{ ...binding, label: "eBay", touchRequired: false }] };
+  };
+  assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, { ...sender, url: state.current.url, origin }),
+    { ok: true, setup: "unique" });
+  assert.equal(discoveries, 1);
+  assert.equal(inventory.version, 2);
+});
+
 test("preview requires a hovered field and foreground window and rechecks revocation", async () => {
   for (const failure of ["none", "hover", "focus", "revoked"]) {
     reset();
@@ -395,10 +430,82 @@ function setupPage() {
   globalThis.document = {
     visibilityState: "visible",
     fields: [input],
-    querySelectorAll: (selector) => selector.startsWith("button") ? document.overrides || [] : document.fields,
+    querySelectorAll: (selector) => selector.startsWith("button") ? document.overrides || []
+      : selector.startsWith('[role="group"]') ? document.groups || [] : document.fields,
   };
   return input;
 }
+
+function setupSplit(length = 6, generic = false) {
+  setupPage();
+  const inputs = Array.from({ length }, (_, index) => Object.assign(new Input(), {
+    id: "pin-box-" + index, maxLength: generic ? 1 : 6, name: "digit-" + index,
+    autocomplete: "off",
+  }));
+  const group = { id: generic ? "otp-inputs" : "pin-boxes", inputs,
+    getAttribute: () => null, querySelectorAll() { return this.inputs; } };
+  document.fields = inputs;
+  document.groups = [group];
+  return { inputs, group };
+}
+
+test("fills a grouped six-digit code and preserves leading zero and input events", () => {
+  const { inputs } = setupSplit();
+  const api = globalThis.yubiKeyFillField;
+  assert.equal(api.fieldFor(inputs[4]), inputs[0]);
+  markClick(inputs[0]);
+  assert.equal(probe(tab.url, "split", true), true);
+  assert.equal(fillField(tab.url, "split", code, Date.now() + 20000), true);
+  assert.equal(inputs.map(input => input.value).join(""), code);
+  assert.ok(inputs.every(input => input.events.length === 1 && input.events[0] === "input"));
+});
+
+test("generic eight-digit groups require OTP semantics and exact code length", () => {
+  let fixture = setupSplit(8, true);
+  assert.equal(probe(tab.url, "eight"), true);
+  assert.equal(fillField(tab.url, "eight", "01234567", Date.now() + 20000), true);
+  assert.equal(fixture.inputs.map(input => input.value).join(""), "01234567");
+  fixture = setupSplit(8, true);
+  assert.equal(probe(tab.url, "mismatch"), true);
+  assert.equal(fillField(tab.url, "mismatch", code, Date.now() + 20000), false);
+  assert.ok(fixture.inputs.every(input => !input.value));
+  fixture.group.id = "unrelated-inputs";
+  assert.equal(probe(tab.url, "unrelated"), false);
+});
+
+test("split inputs reject partial values, mixed forms, ambiguous groups and replaced nodes", () => {
+  let fixture = setupSplit();
+  fixture.inputs[3].value = "9";
+  assert.equal(probe(tab.url, "partial"), false);
+  fixture = setupSplit();
+  fixture.inputs[3].form = { attributes: { action: "/same-origin" } };
+  assert.equal(probe(tab.url, "mixed"), false);
+  fixture = setupSplit();
+  const other = setupSplit();
+  document.groups = [fixture.group, other.group];
+  document.fields = [...fixture.inputs, ...other.inputs];
+  assert.equal(probe(tab.url, "ambiguous"), false);
+  fixture = setupSplit();
+  assert.equal(probe(tab.url, "replaced"), true);
+  fixture.inputs[5] = Object.assign(new Input(), { id: "pin-box-5", maxLength: 6 });
+  assert.equal(fillField(tab.url, "replaced", code, Date.now() + 20000), false);
+});
+
+test("split filling stops if an input handler changes the destination or replaces a later digit", () => {
+  for (const change of ["destination", "replacement"]) {
+    const { inputs } = setupSplit();
+    const form = { attributes: { action: "/verify" } };
+    inputs.forEach(input => { input.form = form; });
+    inputs[0].dispatchEvent = () => {
+      if (change === "destination") form.attributes.action = "https://attacker.test/";
+      else inputs[5] = Object.assign(new Input(), { id: "pin-box-5", maxLength: 6, form });
+    };
+    assert.equal(probe(tab.url, "race"), true);
+    assert.equal(fillField(tab.url, "race", code, Date.now() + 20000), false);
+    assert.equal(inputs[0].value, "0");
+    assert.ok(inputs.slice(1).every(input => !input.value));
+  }
+});
 
 test("writes a dummy code and dispatches input without submitting", () => {
   const input = setupPage();

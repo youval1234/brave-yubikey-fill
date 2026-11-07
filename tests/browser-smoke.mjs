@@ -64,7 +64,7 @@ try {
   const target=await until(async()=>(await targets()).find(t=>t.url==="chrome-extension://"+id+"/worker.js"),"No worker");
   worker=await connect(target.webSocketDebuggerUrl);
   await until(()=>evaluate(worker,'typeof chrome!=="undefined" && chrome.runtime?.id'),"No runtime");
-  await evaluate(worker, '(async()=>{await chrome.storage.local.clear();await chrome.storage.session.clear();globalThis.codes=0;globalThis.previews=0;chrome.runtime.sendNativeMessage=async(_host,request)=>{if(request.op==="discover")return {ok:true,accounts:[{device:"dummy",id:"ab",label:"Amazon · demo",touchRequired:false},{device:"dummy",id:"cd",label:"NVIDIA · demo",touchRequired:false}]};if(request.op==="preview"){previews++;return {ok:true,code:previews%2?"123456":"654321",startsAt:Date.now()-29350,expiresAt:Date.now()+650};}codes++;return {ok:true,code:"012345",expiresAt:Date.now()+25000};};})()');
+  await evaluate(worker, '(async()=>{await chrome.storage.local.clear();await chrome.storage.session.clear();globalThis.codes=0;globalThis.previews=0;chrome.runtime.sendNativeMessage=async(_host,request)=>{if(request.op==="discover")return {ok:true,accounts:[{device:"dummy",id:"ab",label:"Amazon · demo",touchRequired:false},{device:"dummy",id:"cd",label:"NVIDIA · demo",touchRequired:false},{device:"dummy",id:"ef",label:"eBay",touchRequired:false}]};if(request.op==="preview"){previews++;return {ok:true,code:previews%2?"123456":"654321",startsAt:Date.now()-29350,expiresAt:Date.now()+650};}codes++;return {ok:true,code:"012345",expiresAt:Date.now()+25000};};})()');
   await evaluate(worker, '(async () => { const getWindow = chrome.windows.get; globalThis.backgroundWindow = true; chrome.windows.get = async (...args) => ({ ...await getWindow(...args), focused: !backgroundWindow }); })()');
   page=await connect((await targets()).find(t=>t.type==="page").webSocketDebuggerUrl);
   await page.call("Page.bringToFront");
@@ -81,8 +81,8 @@ try {
     await until(()=>evaluate(page,'document.readyState==="complete" && location.href==='+JSON.stringify(url)),"No fixture");
   }
   const findButton=async()=>buttonIn((await page.call("DOM.getDocument",{depth:-1,pierce:true})).root);
-  async function hoveredButton() {
-    const rect = await evaluate(page, '(() => { const input=document.querySelector("input"); if(!input)return null; const r=input.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width}; })()');
+  async function hoveredButton(index = 0) {
+    const rect = await evaluate(page, '(() => { const input=document.querySelectorAll("input:not([type=hidden])")[' + index + ']; if(!input)return null; const r=input.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width}; })()');
     if (rect?.width) await page.call("Input.dispatchMouseEvent", { type:"mouseMoved", x:rect.x, y:rect.y });
     return findButton();
   }
@@ -112,14 +112,19 @@ try {
   const idleWork = await isolated(() => ({...workCounts}));
   console.log("Idle mutation and pointer benchmark:", JSON.stringify(idleWork));
   assert.deepEqual(idleWork, {fields:0,frames:0}, "Idle pages performed field scans or scheduled frames");
-  for(const [url,markup] of [
+  for(const [url,markup,hoverIndex = 0] of [
     ["https://www.amazon.com/ap/mfa",'<form action="/verify"><h1>Two-Step Verification</h1><input id="auth-mfa-otpcode" name="otpCode" type="tel"></form>'],
-    ["https://login.nvgs.nvidia.com/v1/security/challenge",'<form action="/verify"><h1>Security Challenge</h1><p>Launch your authentication app and generate a security code.</p><label for="code">Enter code</label><input id="code" placeholder="Please enter code"></form>']
+    ["https://login.nvgs.nvidia.com/v1/security/challenge",'<form action="/verify"><h1>Security Challenge</h1><p>Launch your authentication app and generate a security code.</p><label for="code">Enter code</label><input id="code" placeholder="Please enter code"></form>'],
+    ["https://accounts.ebay.ch/mfaxs/signin",'<input type="hidden"><h1>Sicherheitscode eingeben</h1><div id="pin-boxes" role="group" aria-label="Sicherheitscode">'+Array.from({length:6},(_,i)=>'<input id="pin-box-'+i+'" name="pin-box-'+i+'" type="tel" maxlength="6" autocomplete="off" style="width:36px">').join('')+'</div><script>document.querySelector("#pin-boxes").addEventListener("input",event=>{const next=event.target.nextElementSibling;if(next&&event.target.value.length===1)next.focus();});</script>',4],
+    ["https://www.amazon.de/ap/mfa",'<h1>Bestätigung</h1><input autocomplete="one-time-code">']
   ]){
+    if (hoverIndex) await evaluate(worker, "backgroundWindow = false");
+    const previewsBefore = await evaluate(worker, "previews");
     await visit(url,markup);
     await pause(400);
     assert.equal(await findButton(), undefined, "Card appeared before hovering");
-    const button=await until(hoveredButton,"No automatic offer for "+url);
+    const button=await until(() => hoveredButton(hoverIndex),"No automatic offer for "+url);
+    if (hoverIndex) await until(async () => await evaluate(worker, "previews") > previewsBefore, "Later digit did not authorize a hover preview");
     const before=await evaluate(worker,"codes");
     const {object}=await page.call("DOM.resolveNode",{backendNodeId:button.backendNodeId});
     await page.call("Runtime.callFunctionOn",{objectId:object.objectId,functionDeclaration:"function(){this.click();}"});
@@ -127,11 +132,11 @@ try {
     assert.equal(await evaluate(worker,"codes"),before,"Synthetic click generated code");
     await evaluate(worker, "backgroundWindow = false");
     await clickButton(button);
-    await until(()=>evaluate(page,'document.querySelector("input").value==="012345"'),"Click failed to fill");
+    await until(()=>evaluate(page,'[...document.querySelectorAll("input:not([type=hidden])")].map(input=>input.value).join("")==="012345"'),"Click failed to fill");
     assert.equal(await evaluate(worker,"codes"),before+1);
     await evaluate(worker, "backgroundWindow = true");
     await page.call("Page.reload");
-    await until(hoveredButton, "Offer disappeared after refreshing the login page");
+    await until(() => hoveredButton(hoverIndex), "Offer disappeared after refreshing the login page");
     assert.equal(await evaluate(worker,"codes"),before+1,"Refresh generated a code");
   }
   await visit("https://login.nvgs.nvidia.com/v1/nfactor/totp-auth",

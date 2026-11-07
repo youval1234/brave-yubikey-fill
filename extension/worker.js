@@ -1,4 +1,4 @@
-import { hostPattern, httpsOrigin, requestHost, siteKey, SUGGESTIONS } from "./shared.js";
+import { hostPattern, httpsOrigin, requestHost, siteKey, SUGGESTIONS, INVENTORY_VERSION } from "./shared.js";
 import { suggestionsForAccounts } from "./matching.js";
 
 let filling = false;
@@ -65,14 +65,14 @@ async function suggestions(origin) {
   const saved = await chrome.storage.local.get(SUGGESTIONS);
   if (saved[SUGGESTIONS]?.[origin]) return saved[SUGGESTIONS][origin];
   const { inventory } = await chrome.storage.session.get("inventory");
-  if (inventory?.expires > Date.now()) return inventory.sites[origin] || [];
+  if (inventory?.version === INVENTORY_VERSION && inventory.expires > Date.now()) return inventory.sites[origin] || [];
   if (!inventoryRequest) {
     inventoryRequest = requestHost({ op: "discover" }).then(async ({ accounts }) => {
       const sites = suggestionsForAccounts(accounts);
-      await chrome.storage.session.set({ inventory: { sites, expires: Date.now() + 60000 } });
+      await chrome.storage.session.set({ inventory: { version: INVENTORY_VERSION, sites, expires: Date.now() + 60000 } });
       return sites;
     }).catch(async () => {
-      await chrome.storage.session.set({ inventory: { sites: {}, expires: Date.now() + 5000, retry: true } });
+      await chrome.storage.session.set({ inventory: { version: INVENTORY_VERSION, sites: {}, expires: Date.now() + 5000, retry: true } });
       return {};
     }).finally(() => { inventoryRequest = undefined; });
   }

@@ -1,4 +1,4 @@
-import { httpsOrigin, SUGGESTIONS } from "./shared.js";
+import { httpsOrigin, SUGGESTIONS, INVENTORY_VERSION } from "./shared.js";
 import { releaseDetails } from "./updates.js";
 const status = document.getElementById("status");
 const title = document.getElementById("status-title");
@@ -21,7 +21,7 @@ read.addEventListener("click", async () => {
     const result = await chrome.runtime.sendMessage({ kind: "panel-discover" });
     if (!result?.ok) throw new Error(result?.message || "Could not read the key.");
     await chrome.storage.local.remove(SUGGESTIONS);
-    await chrome.storage.session.set({ inventory: { sites: result.preview, expires: Date.now() + 60000 } });
+    await chrome.storage.session.set({ inventory: { version: INVENTORY_VERSION, sites: result.preview, expires: Date.now() + 60000 } });
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id && httpsOrigin(tab.url)) {
       await chrome.tabs.sendMessage(tab.id, { kind: "pairing-updated" }, { frameId: 0 }).catch(() => {});
