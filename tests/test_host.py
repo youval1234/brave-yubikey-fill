@@ -1,12 +1,16 @@
 import io
+import json
+from pathlib import Path
 import struct
+import subprocess
+import tempfile
 import unittest
 from time import time
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from yubikit.oath import Code, Credential, OATH_TYPE
 
-from host.yubikey_fill_host import HostError, frame, process_request, read_request
+from host.yubikey_fill_host import HostError, check_update, frame, handle, process_request, read_request
 
 
 DEVICE = "A" * 22
@@ -24,17 +28,74 @@ class HostTest(unittest.TestCase):
         return {"op": "code", "device": device, "id": entry.id.hex()}
 
     def test_native_messages_validate_the_exact_schema(self):
+        self.assertEqual(read_request(io.BytesIO(frame({"op": "update-check"}))), {"op": "update-check"})
         self.assertEqual(read_request(io.BytesIO(frame(self.request()))), self.request())
         request = {**self.request(NO_TOUCH), "requireTouch": False}
         self.assertEqual(read_request(io.BytesIO(frame(request))), request)
         for bad in (
             {"op": "code"}, {"op": "accounts", "password": "dummy"},
             {**request, "requireTouch": "false"}, {**request, "requireTouch": 0}, [],
+            {"op": "update-check", "url": "https://attacker.test"},
+            {"op": "update-check", "args": ["auth", "token"]},
         ):
             with self.assertRaises(HostError):
                 read_request(io.BytesIO(frame(bad)))
         with self.assertRaises(HostError):
             read_request(io.BytesIO(struct.pack("<I", 10) + b"{}"))
+
+    def test_update_check_never_opens_the_key(self):
+        with patch("host.yubikey_fill_host.check_update", return_value={"ok": True}) as check:
+            self.assertEqual(handle({"op": "update-check"}), {"ok": True})
+            check.assert_called_once_with()
+
+    def update(self, release, returncode=0):
+        with tempfile.TemporaryDirectory(prefix="yubikey-update-test-") as folder:
+            executable = Path(folder, "gh.exe")
+            executable.touch()
+            with patch("pathlib.Path.read_text", return_value=json.dumps({"path": str(executable)})), \
+                    patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+                    patch("subprocess.run", return_value=Mock(returncode=returncode, stdout=json.dumps(release).encode())) as run:
+                result = check_update()
+                args, kwargs = run.call_args
+                self.assertEqual(args[0][:5], [str(executable), "api", "--hostname", "github.com",
+                                             "repos/youval1234/brave-yubikey-fill/releases/latest"])
+                self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+                self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+                self.assertEqual(kwargs["timeout"], 15)
+                self.assertNotIn("shell", kwargs)
+                return result
+
+    def test_update_only_returns_validated_version_and_fixed_release_link(self):
+        self.assertEqual(self.update({"tag": "v0.7.3", "draft": False, "prerelease": False,
+                                      "body": "ignored release content"}), {
+            "ok": True, "version": "0.7.3",
+            "releaseUrl": "https://github.com/youval1234/brave-yubikey-fill/releases/tag/v0.7.3",
+        })
+
+    def test_update_rejects_untrusted_or_unavailable_release_metadata(self):
+        for release in [None, [], {"tag": "v0.7.3"},
+                        *[{"tag": tag, "draft": False, "prerelease": False}
+                          for tag in ["v0.7.3-beta", "v00.7.3", "v65536.0.0", "../code", "<script>"]],
+                        {"tag": "v0.7.3", "draft": True, "prerelease": False},
+                        {"tag": "v0.7.3", "draft": False, "prerelease": True}]:
+            with self.subTest(release=release), self.assertRaisesRegex(HostError, "updates"):
+                self.update(release)
+        with self.assertRaisesRegex(HostError, "updates"):
+            self.update({"tag": "v0.7.3", "draft": False, "prerelease": False}, returncode=1)
+
+    def test_update_config_and_timeouts_fail_without_exposing_diagnostics(self):
+        with patch("pathlib.Path.read_text", side_effect=FileNotFoundError), self.assertRaisesRegex(HostError, "updates"):
+            check_update()
+        with patch("pathlib.Path.read_text", return_value='{"path":"gh.exe"}'), self.assertRaisesRegex(HostError, "updates"):
+            check_update()
+        with tempfile.TemporaryDirectory(prefix="yubikey-update-test-") as folder:
+            executable = Path(folder, "gh.exe")
+            executable.touch()
+            with patch("pathlib.Path.read_text", return_value=json.dumps({"path": str(executable)})), \
+                    patch("subprocess.CREATE_NO_WINDOW", 0, create=True), \
+                    patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gh", 15)), \
+                    self.assertRaisesRegex(HostError, "updates"):
+                check_update()
 
     def test_enrollment_lists_totp_metadata_with_and_without_touch(self):
         response = process_request({"op": "accounts"}, self.session)

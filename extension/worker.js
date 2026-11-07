@@ -225,7 +225,12 @@ chrome.commands.onCommand.addListener((command, tab) => {
   if (command === "fill-code") void fill(tab);
 });
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  const fromPanel = sender.url === chrome.runtime.getURL("panel.html");
+  const fromPanel = sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("panel.html");
+  if (message?.kind === "panel-update-check" && fromPanel) {
+    requestHost({ op: "update-check" }).then(reply,
+      () => reply({ ok: false, message: "Could not check here. Update the Windows helper and check GitHub CLI sign-in, or view releases on GitHub." }));
+    return true;
+  }
   if (message?.kind === "panel-discover" && fromPanel) {
     requestHost({ op: "accounts" }).then(async ({ accounts }) => {
       // A native password dialog can close the toolbar popup. Keep the

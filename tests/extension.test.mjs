@@ -99,6 +99,7 @@ function reset() {
     },
     runtime: {
       id: "test-extension",
+      getURL: file => "chrome-extension://test-extension/" + file,
       onInstalled: listener(),
       onStartup: listener(),
       onMessage: listener(),
@@ -113,7 +114,25 @@ function reset() {
 }
 
 reset();
+const registeredMessages = chrome.runtime.onMessage;
 const { fill, handlePrompt, injectOpenTabs } = await import("../extension/worker.js");
+
+test("only this extension's own popup can invoke the private-release check", async () => {
+  for (const source of [
+    { id: "test-extension", url: "chrome-extension://test-extension/panel.html" },
+    { id: "attacker", url: "chrome-extension://test-extension/panel.html" },
+    { id: "test-extension", url: "https://login.example.test/challenge" },
+  ]) {
+    reset();
+    let reply;
+    // The handler uses the current chrome mock even after reset().
+    registeredMessages.emit({ kind: "panel-update-check" }, source, value => { reply = value; });
+    await new Promise(resolve => setImmediate(resolve));
+    const trusted = source.id === "test-extension" && source.url.endsWith("/panel.html");
+    assert.equal(events.some(([kind, request]) => kind === "request" && request.op === "update-check"), trusted);
+    assert.equal(Boolean(reply), trusted);
+  }
+});
 
 test("updates inject the prompt into existing HTTPS tabs without reloading their pages", async () => {
   reset();

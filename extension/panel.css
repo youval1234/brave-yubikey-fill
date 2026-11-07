@@ -49,6 +49,11 @@ button:disabled .refresh-icon { animation: refresh 1.1s linear infinite; }
 button:focus-visible, a:focus-visible { outline: 2px solid #acd67a; outline-offset: 3px; }
 footer { display: flex; align-items: center; justify-content: center; gap: 6px; border-top: 1px solid #2b3527; margin-top: 10px; padding-top: 14px; font-size: 10px; color: #96a48d; }
 footer svg { width: 12px; height: 12px; }
+.update-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 5px; color: #96a48d; font-size: 11px; }
+#check-updates { width: auto; min-height: 32px; margin: 0; padding: 5px 8px; background: transparent; border-color: transparent; color: #b8da92; font-size: 11px; }
+#check-updates:hover { background: #20291d; }
+.update-status { margin: 7px 0 0; color: #bac6b3; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.release-link { display: inline-block; margin-top: 7px; color: #b8da92; font-size: 11px; }
 .guide[data-state="error"] { border-color: #76613a; }
 .guide[data-state="error"] .status-dot { background: #e2b66a; box-shadow: none; }
 .guide[data-state="error"] .eyebrow { color: #e2c28f; }

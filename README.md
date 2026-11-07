@@ -1,36 +1,78 @@
-# YubiKey Fill for Brave
+# YubiKey Fill
 
-YubiKey Fill detects a supported OTP field on an HTTPS page and matches the exact site to an account on your connected YubiKey. Hover over the field for 280 ms to reveal a green-and-charcoal card. It shows the code and seconds remaining, refreshing the preview when it expires. Click **Fill code**, then submit the site's form. Multiple matching accounts appear as separate buttons with masked usernames.
+Hardware-backed OTP autofill for **Brave on Windows**. Your YubiKey calculates the code; the extension helps you use it on the matching login page.
 
-## Install or update
+![Toolbar popup](docs/popup-preview.png)
 
-Load this checkout's `extension` directory at `brave://extensions`. Run `./Install.ps1 -ExtensionId YOUR_EXTENSION_ID` from this checkout to install the Windows helper. It needs Python 3.14 x64 with Tk and Windows .NET Framework.
+Hover over a supported code field to reveal the inline offer. See the code and time remaining, then click **Fill code**. Submit the website's form yourself. No per-site setup is needed for recognized providers with a unique matching account; multiple matches offer an account choice.
 
-Version 0.7 adds hover previews and needs the updated Windows helper. Run the installer, reload the extension and refresh existing login pages. The connected key is discovered when the pointer hovers over a supported field. Account metadata is cached in trusted extension session storage for up to one minute.
+[Latest release](https://github.com/youval1234/brave-yubikey-fill/releases/latest) · [Privacy and security review](docs/SECURITY-REVIEW.md) · [Performance measurements](docs/PERFORMANCE.md)
 
-Version 0.7.1 reduces page work and retained memory: the DOM observer runs only during a relevant hover, unrelated pointer movement skips field scans, popup styles are created on demand, and closing the card clears its code and DOM references. The native helper is unchanged from 0.7.0; no helper reinstall is needed for this update.
+## Features
 
-Private windows are supported using a separate extension worker. After reloading v0.7.1, open the extension's Details at `brave://extensions` and enable **Allow in Private** once; Brave controls this opt-in. Existing normal-window pairings remain available, but automatic fills in private windows do not save new site/account pairings. Chromium shares extension `storage.local` between normal and private windows, so explicitly changing settings in the extension's options still changes shared settings. Private access uses the same HTTPS, hover, trusted-click, field and origin checks.
+- YubiKey-inspired popup and animated hover card, with reduced-motion support.
+- Live TOTP preview and expiry countdown; expired previews refresh automatically.
+- Exact-domain matching, foreground and document checks, and trusted-click filling.
+- Existing OATH password and hardware-touch requirements remain enforced.
+- Private-window support without saving new automatic site/account pairings.
+- Event-driven page observation and on-demand styles to reduce idle work.
+- Optional private GitHub release checks; no credentials bundled in the extension.
 
-The toolbar popup offers an optional **Refresh key accounts** action to reread the key's account list after adding or removing an account. Automatic matching also refreshes expired metadata as needed; this button is not a required sign-in step. A password-locked OATH application may ask for its password when using this action. **Manage pairings** is available for advanced use. Normal login use needs only a click on the inline offer.
+## Install
 
-## Security and compatibility
+Requirements: Windows x64, Brave, Python 3.14 x64 with Tk, Windows .NET Framework, and a YubiKey with USB smart-card/CCID enabled. Keep Yubico Authenticator installed for managing the accounts on your key.
 
-- HTTPS site access lets the content script detect OTP fields. Account matching checks exact known login hosts or an issuer that explicitly names an HTTPS origin. It never uses a substring match against a brand name in the site's hostname.
-- Passive discovery reads account metadata using an expired challenge and never requests a current code. A password-locked OATH application returns a locked result without opening a password dialog. Unlocking that application requires the user's OATH password.
-- Hovering requests a current code for preview only while the field or card is under the pointer in the foreground tab. Preview requests stop when the card closes or the page loses focus. A trusted click is required to fill the form. The worker checks the top-level sender, active tab, document, exact field, destination origin, account selection and code expiry. The helper checks the particular key and credential.
-- Previews apply to a uniquely matched account without hardware touch. Password-protected or touch-required accounts keep their protections and use the Fill code action. Codes with a configured length of eight digits retain their full length.
-- TOTP secrets stay on the hardware. Codes and passwords are handled transiently. There is no app logging, clipboard use, remote service or persistent password cache. The login page can read the code once filled. Malware running as the local Windows user remains within the trust boundary.
-- Existing hardware touch policies are preserved. Credentials without a touch requirement fill after the browser click. The extension never changes the key's configuration.
-- Supported inputs include standard one-time-code autocomplete fields, common OTP field names, and a single code field in an authentication-app challenge. Unfamiliar markup, split inputs and embedded frames may need further adapters.
-- Recognized login hosts are listed in `extension/matching.js`. A service label on a YubiKey does not contain a cryptographically verified website address, so unfamiliar providers require a verified domain mapping.
+1. Download the **extension ZIP** and **source ZIP** from the release page and extract them. The extension ZIP contains `manifest.json` at its root; the source ZIP includes the Windows installer and helper source.
+2. At `brave://extensions`, enable Developer mode and choose **Load unpacked**. Select the extracted extension folder.
+3. Copy the extension ID shown by Brave. From the extracted source folder, run:
 
-Keep OTP seeds, recovery codes, account labels and site approvals out of Git. Run `./Uninstall.ps1` to unregister the helper and remove the extension in Brave to clear its local data.
+   ```powershell
+   ./Install.ps1 -ExtensionId YOUR_EXTENSION_ID
+   ```
 
-## Verify
+4. Open a recognized HTTPS login page and hover over its OTP field. Click **Fill code** when offered. Touch or unlock the key if its existing policy requires it.
 
-Run `node --test tests/extension.test.mjs` and `python -m unittest discover -s tests` from an environment with the pinned host requirements. Run `node tests/browser-smoke.mjs` on Windows to test fresh-profile Brave behavior with intercepted Amazon and NVIDIA fixture pages and dummy credentials. The browser test makes no live login attempt.
+For private windows, enable **Details → Allow in Private** once in Brave. The browser controls this permission.
 
-The browser test also checks idle-page work and observer cleanup, then deletes its temporary profile. Set `YUBIKEY_TEST_SCREENSHOT` to an output PNG path only when a dummy preview screenshot is needed.
+Only one YubiKey may be connected for a read. Account metadata is cached for up to one minute. **Refresh key accounts** optionally rereads that list after account changes; it is not a required sign-in step. Saved pairings pin the particular key and credential, so a different key does not silently replace an existing pairing. **Manage pairings** provides advanced manual configuration.
 
-Run `node tests/memory-smoke.mjs` for an approximate fresh-profile memory comparison. It uses dummy credentials, reports the fixture page's total JavaScript heap and the isolated Brave process tree's working set, then checks memory after the extension worker has had time to suspend. Browser process measurements include Chromium overhead and shared pages; they are not an exact measurement of extension allocations.
+## Updates
+
+Version **0.7.3** adds **Check for updates**, release packaging and security hardening. Its update checker needs the updated Windows helper. Existing OTP filling does not require a GitHub sign-in.
+
+For private release checks, install GitHub CLI and sign in to an account with access to this repository (`gh auth login --hostname github.com`), then run `Install.ps1`. The installer records only the resolved CLI executable path. Your authentication remains managed by GitHub CLI, outside the repository and browser extension.
+
+Click **Check for updates** in the toolbar popup. It checks the latest published stable release only when clicked. If setup or access is unavailable, **View release on GitHub** opens the release page using your browser session.
+
+This is an unpacked extension: the button checks and links to downloads; it does not install downloaded code. Replace files in the existing extension folder to preserve its ID, then reload it in Brave. Rerun the helper installer when release notes require it. [Browser update lifecycle](https://developer.chrome.com/docs/extensions/develop/concepts/extensions-update-lifecycle).
+
+## Privacy and security
+
+Normal OTP operations use local USB/Native Messaging only. Update checks use a fixed GitHub API endpoint through GitHub CLI; installation downloads hash-pinned packages from PyPI. The application does not send OTPs, account labels, device identifiers or website URLs to those services. Opening a release page is a normal GitHub navigation.
+
+OTP seeds remain on the key. Account labels, key/credential identifiers and normal-window pairings are sensitive local metadata, stored in trusted extension storage; they are not encrypted vault data. Codes and passwords are transient. There is no app telemetry, clipboard use, analytics or password cache.
+
+The matched website can read a code once filled. Treat a content-script preview as visible to that page's renderer; a closed shadow root is UI encapsulation, not a security boundary. A compromised legitimate site, compromised browser, or malware running as your Windows user is outside the protections this extension can provide. TOTP is not phishing-resistant like an origin-bound FIDO/passkey login.
+
+Automatic offers need HTTPS site access. Matching uses exact known login hosts or an issuer explicitly naming an HTTPS origin; issuer labels are hints, not cryptographic proof of the service. Unfamiliar providers, split input boxes and embedded frames may need adapters. See `extension/matching.js` for recognized hosts.
+
+The repository and its releases are currently private. Keep OTP seeds, recovery codes, personal screenshots, CLI authentication files and browser-profile data out of Git. Run `./Uninstall.ps1` to unregister the helper; remove the extension in Brave to clear its extension storage.
+
+## Verification and release building
+
+```powershell
+node --test tests/extension.test.mjs tests/updates.test.mjs
+python -B -m unittest discover -s tests
+node tests/browser-smoke.mjs
+python -B tools/privacy_audit.py --history
+```
+
+Run Python tests from an environment with `host/requirements.txt` installed. Browser tests use fresh isolated Brave profiles, intercepted fixture pages and dummy credentials; they make no live login attempt and remove their profiles afterward. `node tests/memory-smoke.mjs` measures approximate browser memory; screenshot output in browser smoke tests is opt-in via `YUBIKEY_TEST_SCREENSHOT`.
+
+After committing reviewed changes, run `python -B tools/build_release.py`. It archives only committed files into ignored `.artifacts/releases/VERSION/`, producing extension/source ZIPs and `SHA256SUMS.txt`. Scan those archives before uploading:
+
+```powershell
+python -B tools/privacy_audit.py --archive PATH_TO_EXTENSION_ZIP --archive PATH_TO_SOURCE_ZIP
+```
+
+The pattern scanner supplements manual review; it does not establish that a project is vulnerability-free. See [SECURITY.md](SECURITY.md) for disclosure guidance.

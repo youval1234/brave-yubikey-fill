@@ -27,6 +27,7 @@ export const errors = {
   hardware: "The YubiKey did not return a code. Check that it is connected and try again.",
   timeout: "The helper timed out. Click again and touch the key if it flashes.",
   host: "The Windows helper could not start. Check the setup instructions.",
+  updates: "Could not check private releases. Check the helper setup and GitHub CLI sign-in, or view releases on GitHub.",
 };
 
 export async function requestHost(request) {

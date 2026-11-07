@@ -24,7 +24,7 @@ def read_request(stream):
     request = json.loads(body.decode("utf-8"))
     if not isinstance(request, dict):
         raise HostError("host")
-    if request in ({"op": "accounts"}, {"op": "discover"}):
+    if request in ({"op": "accounts"}, {"op": "discover"}, {"op": "update-check"}):
         return request
     code_fields = {"op", "device", "id"}
     if (request.keys() in (code_fields, code_fields | {"requireTouch"}) and request["op"] in ("code", "preview")
@@ -105,7 +105,52 @@ def process_request(request, session):
     return result
 
 
+def check_update():
+    # Only a fixed, read-only endpoint is available. Authentication stays in gh's
+    # local credential store; neither a token nor arbitrary CLI arguments enter
+    # the extension or Native Messaging protocol.
+    import os
+    from pathlib import Path
+    import subprocess
+
+    try:
+        config = json.loads(Path(__file__).with_name("github-cli.local.json").read_text(encoding="utf-8"))
+        executable = Path(config["path"])
+        if not executable.is_absolute() or executable.name.lower() != "gh.exe" or not executable.is_file():
+            raise HostError("updates")
+        env = dict(os.environ)
+        env.pop("GH_DEBUG", None)
+        env.update(GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", GH_NO_EXTENSION_UPDATE_NOTIFIER="1")
+        response = subprocess.run([
+            str(executable), "api", "--hostname", "github.com",
+            "repos/youval1234/brave-yubikey-fill/releases/latest",
+            "--jq", "{tag: .tag_name, draft: .draft, prerelease: .prerelease}",
+        ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            timeout=15, check=False, env=env, creationflags=subprocess.CREATE_NO_WINDOW)
+        if response.returncode or len(response.stdout) > 4096:
+            raise HostError("updates")
+        release = json.loads(response.stdout)
+        if not isinstance(release, dict):
+            raise HostError("updates")
+        tag = release.get("tag")
+        if (release.get("draft") is not False or release.get("prerelease") is not False
+                or not isinstance(tag, str) or not re.fullmatch(r"v?\d{1,5}(?:\.\d{1,5}){2,3}", tag)):
+            raise HostError("updates")
+        version = tag.removeprefix("v")
+        parts = version.split(".")
+        if any(int(part) > 65535 or (len(part) > 1 and part.startswith("0")) for part in parts):
+            raise HostError("updates")
+        return {"ok": True, "version": version,
+                "releaseUrl": "https://github.com/youval1234/brave-yubikey-fill/releases/tag/" + tag}
+    except HostError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        raise HostError("updates") from None
+
+
 def handle(request):
+    if request["op"] == "update-check":
+        return check_update()
     from smartcard.ExclusiveConnectCardConnection import ExclusiveConnectCardConnection
     from ykman.pcsc import ScardSmartCardConnection, list_readers
     from yubikit.oath import OathSession

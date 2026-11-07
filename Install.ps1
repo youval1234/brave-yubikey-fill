@@ -29,6 +29,13 @@ $exe = Join-Path $build 'YubiKeyFill.exe'
 & $csc /nologo /target:winexe /platform:x64 /optimize+ "/out:$exe" (Join-Path $PSScriptRoot 'host\Launcher.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Could not compile the native launcher.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'host\yubikey_fill_host.py') -Destination $build
+# Optional private-release checks use the existing GitHub CLI installation.
+# Store only its resolved path, never its authentication material.
+$githubCli = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue
+if ($githubCli) {
+    $cliJson = @{ path = $githubCli.Source } | ConvertTo-Json
+    [IO.File]::WriteAllText((Join-Path $build 'github-cli.local.json'), $cliJson, [Text.UTF8Encoding]::new($false))
+}
 $origin = "chrome-extension://$ExtensionId/"
 Set-Content -LiteralPath (Join-Path $build 'origin.txt') -Value $origin -Encoding ascii -NoNewline
 $manifest = Join-Path $build 'native-host.json'

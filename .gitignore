@@ -5,3 +5,12 @@ __pycache__/
 *.pem
 *.key
 *.local.json
+.artifacts/
+.env
+.env.*
+*.pfx
+*.p12
+*.sqlite*
+*.log
+native-host.json
+origin.txt
