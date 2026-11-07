@@ -72,7 +72,7 @@
     return node;
   }
 
-  async function requestCode(event) {
+  async function requestCode(event, choice) {
     if (!event.isTrusted || waiting || host?.parentNode !== document.documentElement
         || host.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) === false
         || !document.hasFocus()
@@ -82,14 +82,14 @@
     const mode = setupMode;
     waiting = true;
     fillButton.disabled = true;
-    fillButton.textContent = mode === "choose" ? "Opening account picker…" : "Waiting for YubiKey…";
-    if (mode !== "choose") detail.textContent = "Reading your key. Touch it if it flashes.";
+    fillButton.textContent = "Waiting for YubiKey…";
+    detail.textContent = "Reading your key. Touch it if it flashes.";
     position();
     controls.markClick(requestedField);
     let result;
     try {
-      const kind = mode === "choose" ? "prompt-choose" : mode === "unique" ? "prompt-enroll" : "prompt-fill";
-      result = await chrome.runtime.sendMessage({ kind });
+      const kind = mode ? "prompt-enroll" : "prompt-fill";
+      result = await chrome.runtime.sendMessage({ kind, choice });
     } catch {
       result = null;
     } finally {
@@ -97,10 +97,6 @@
       waiting = false;
     }
     if (currentHost !== host) return;
-    if (mode === "choose" && result?.ok) {
-      close();
-      return;
-    }
     detail.textContent = result?.message || "Reload this page and try again.";
     fillButton.textContent = result?.ok ? "Code filled" : "Try again";
     fillButton.disabled = Boolean(result?.ok);
@@ -112,7 +108,7 @@
     }
   }
 
-  function show(input, setup) {
+  function show(input, setup, choices) {
     anchor = input;
     setupMode = setup;
     host = document.createElement("div");
@@ -156,12 +152,22 @@
       dismissed = input;
       close();
     });
-    fillButton = element("button", "fill",
-      setup === "choose" ? "Choose account" : setup === "unique" ? "Approve & fill" : "Fill code");
+    fillButton = element("button", "fill", "Fill code");
     fillButton.type = "button";
-    fillButton.addEventListener("click", requestCode);
+    fillButton.addEventListener("click", (event) => { void requestCode(event); });
     header.append(logo, copy, dismiss);
-    card.append(header, fillButton);
+    card.append(header);
+    if (choices?.length) {
+      for (const [index, label] of choices.entries()) {
+        const button = element("button", "fill", label);
+        button.type = "button";
+        button.addEventListener("click", (event) => {
+          fillButton = button;
+          void requestCode(event, index);
+        });
+        card.append(button);
+      }
+    } else card.append(fillButton);
     shadow.append(card);
     document.documentElement.append(host);
     position();
@@ -178,12 +184,12 @@
     scanFrame = 0;
   }
 
-  function offerReady(setup, requireFocus) {
+  function offerReady(setup, requireFocus, choices) {
     const input = controls.field();
     if (host || waiting || !input || input === dismissed
         || (requireFocus && document.activeElement !== input)) return false;
     stopDiscovery();
-    show(input, setup);
+    show(input, setup, choices);
     return true;
   }
 
@@ -193,9 +199,28 @@
     const attempt = ++generation;
     const url = location.href;
     try {
+      if (!controls.field()) {
+        if (!discoveryObserver) {
+          discoveryObserver = new MutationObserver(() => {
+            if (scanFrame || document.hidden) return;
+            scanFrame = requestAnimationFrame(() => {
+              scanFrame = 0;
+              if (controls.field()) {
+                stopDiscovery();
+                void offer(true);
+              }
+            });
+          });
+          discoveryObserver.observe(document.documentElement, {
+            subtree: true, childList: true, attributes: true,
+            attributeFilter: ["autocomplete", "name", "id", "hidden", "disabled"],
+          });
+        }
+        return;
+      }
       const result = await chrome.runtime.sendMessage({ kind: "prompt-status" });
       if (!result?.ok || attempt !== generation || location.href !== url) return;
-      if (offerReady(result.setup, !automatic) || !automatic || discoveryObserver) return;
+      if (offerReady(result.setup, !automatic, result.choices) || !automatic || discoveryObserver) return;
       discoveryObserver = new MutationObserver(() => {
         if (scanFrame || document.hidden) return;
         scanFrame = requestAnimationFrame(() => {

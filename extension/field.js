@@ -22,7 +22,18 @@
 
   function field() {
     if (window.top !== window || document.visibilityState !== "visible") return null;
-    const candidates = [...document.querySelectorAll(selector)].filter((input) => {
+    let inputs = [...document.querySelectorAll(selector)];
+    if (!inputs.length) {
+      const labeled = [...document.querySelectorAll('input[type="text"], input[type="tel"], input[type="number"], input:not([type])')]
+        .filter((input) => /\bcode\b/i.test([
+          input.placeholder || "", input.getAttribute?.("aria-label") || "",
+          ...[...(input.labels || [])].map((label) => label.textContent),
+        ].join(" ")));
+      if (labeled.length && /authenticat(?:ion|or) app|two.step verification|security challenge/i.test(document.body?.innerText || "")) {
+        inputs = labeled;
+      }
+    }
+    const candidates = inputs.filter((input) => {
       const style = getComputedStyle(input);
       return ["text", "tel", "number", "password"].includes(input.type)
         && !input.matches(":disabled, [readonly]")

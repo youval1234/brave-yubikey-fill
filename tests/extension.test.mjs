@@ -7,7 +7,7 @@ const { probe, fill: fillField, markClick } = globalThis.yubiKeyFillField;
 
 const site = "https://login.example.test";
 const tab = { id: 7, windowId: 4, url: site + "/challenge" };
-const binding = { device: "test-device", id: "ab" };
+const binding = { device: "test-device", id: "ab", label: "Demo" };
 const code = "012345";
 
 test("suggests the Amazon account on the exact Amazon origin", () => {
@@ -61,6 +61,7 @@ function reset() {
       setTitle: async ({ title }) => events.push(["status", title]),
     },
     storage: {
+      session: { get: async () => ({}), set: async () => {} },
       onChanged: listener(),
       local: {
         get: async (key) => {
@@ -101,6 +102,7 @@ function reset() {
       onStartup: listener(),
       onMessage: listener(),
       sendNativeMessage: async (_host, request) => {
+        if (request.op === "discover") return { ok: true, accounts: [] };
         events.push(["request", request]);
         state.duringTouch?.();
         return { ok: true, code, expiresAt: Date.now() + 20_000 };
@@ -158,7 +160,9 @@ test("enrollment refuses ambiguous suggestions, revoked permission and a changed
     state.suggestions[site] = [binding];
     if (problem === "ambiguous") {
       state.suggestions[site].push({ ...binding, id: "different-account" });
-      assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, sender), { ok: true, setup: "choose" });
+      assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, sender), {
+        ok: true, setup: "choose", choices: ["Demo", "Demo"],
+      });
     }
     if (problem === "revoked") state.permitted = false;
     if (problem === "changed") {

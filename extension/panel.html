@@ -7,21 +7,9 @@
 <link rel="stylesheet" href="panel.css">
 <main>
   <h1><img src="icons/key-48.png" width="32" height="32" alt=""> YubiKey Fill</h1>
-  <section id="current" hidden>
-    <p id="origin"></p>
-    <label id="chooser" hidden>Account <select id="account"></select></label>
-    <button id="use" hidden>Use this account</button>
-    <button id="fill" hidden>Fill code</button>
-  </section>
   <p id="status" role="status" aria-live="polite"></p>
-  <details id="sites" hidden>
-    <summary id="summary">Matched sites</summary>
-    <ul id="domains"></ul>
-  </details>
   <div class="actions">
-    <button id="enable" hidden>Allow automatic offers</button>
-    <button id="read">Find sites on my YubiKey</button>
-    <button id="disable" hidden>Turn off automatic offers</button>
+    <button id="read">Refresh key accounts</button>
   </div>
   <a href="options.html" target="_blank" rel="noopener">Manage pairings</a>
 </main>

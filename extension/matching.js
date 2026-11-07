@@ -10,7 +10,7 @@ const knownHosts = new Map([
   ["google", ["accounts.google.com"]],
   ["hp", ["account.hp.com"]],
   ["linkedin", ["linkedin.com", "www.linkedin.com"]],
-  ["nvidia", ["www.nvidia.com", "www.nvidia.co.uk"]],
+  ["nvidia", ["www.nvidia.com", "login.nvgs.nvidia.com", "profile.nvgs.nvidia.com"]],
   ["openai", ["chatgpt.com", "auth.openai.com", "platform.openai.com"]],
   ["paypal", ["paypal.com", "www.paypal.com"]],
   ["razer", ["www.razer.com", "razerid.razer.com"]],

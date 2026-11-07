@@ -17,6 +17,7 @@ export const siteKey = (origin) => "site:" + origin;
 export const hostPattern = (origin) => "https://" + new URL(origin).hostname + "/*";
 
 export const errors = {
+  locked: "Unlock the OATH application in Yubico Authenticator to discover its accounts.",
   cancelled: "OATH password entry was cancelled.",
   password: "The YubiKey rejected the OATH password.",
   device: "Connect exactly one YubiKey with USB smart card (CCID) enabled.",

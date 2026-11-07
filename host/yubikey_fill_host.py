@@ -24,7 +24,7 @@ def read_request(stream):
     request = json.loads(body.decode("utf-8"))
     if not isinstance(request, dict):
         raise HostError("host")
-    if request == {"op": "accounts"}:
+    if request in ({"op": "accounts"}, {"op": "discover"}):
         return request
     code_fields = {"op", "device", "id"}
     if (request.keys() in (code_fields, code_fields | {"requireTouch"}) and request["op"] == "code"
@@ -68,6 +68,8 @@ def process_request(request, session):
 
     if request["op"] == "code" and request["device"] != session.device_id:
         raise HostError("device")
+    if request["op"] == "discover" and session.locked:
+        raise HostError("locked")
     unlock(session)
 
     # LIST omits touch policy. CALCULATE ALL reports it. Use an expired
@@ -76,7 +78,7 @@ def process_request(request, session):
         credential for credential in session.calculate_all(timestamp=1)
         if credential.oath_type == OATH_TYPE.TOTP
     )
-    if request["op"] == "accounts":
+    if request["op"] in ("accounts", "discover"):
         return {"ok": True, "accounts": [
             {"device": session.device_id, "id": entry.id.hex(),
              "label": " · ".join(filter(None, (entry.issuer, entry.name))),

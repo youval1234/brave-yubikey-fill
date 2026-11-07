@@ -1,8 +1,8 @@
 import { hostPattern, httpsOrigin, requestHost, siteKey, SUGGESTIONS } from "./shared.js";
-import { syncPrompts } from "./prompts.js";
 import { suggestionsForAccounts } from "./matching.js";
 
 let filling = false;
+let inventoryRequest;
 
 async function status(tabId, text, title) {
   await Promise.all([
@@ -18,7 +18,20 @@ function canPrompt(origin, binding) {
 
 async function suggestions(origin) {
   const saved = await chrome.storage.local.get(SUGGESTIONS);
-  return saved[SUGGESTIONS]?.[origin] || [];
+  if (saved[SUGGESTIONS]?.[origin]) return saved[SUGGESTIONS][origin];
+  const { inventory } = await chrome.storage.session.get("inventory");
+  if (inventory?.expires > Date.now()) return inventory.sites[origin] || [];
+  if (!inventoryRequest) {
+    inventoryRequest = requestHost({ op: "discover" }).then(async ({ accounts }) => {
+      const sites = suggestionsForAccounts(accounts);
+      await chrome.storage.session.set({ inventory: { sites, expires: Date.now() + 60000 } });
+      return sites;
+    }).catch(async () => {
+      await chrome.storage.session.set({ inventory: { sites: {}, expires: Date.now() + 5000 } });
+      return {};
+    }).finally(() => { inventoryRequest = undefined; });
+  }
+  return (await inventoryRequest)[origin] || [];
 }
 
 function sameAccount(current, expected) {
@@ -26,7 +39,7 @@ function sameAccount(current, expected) {
     && current?.touchRequired === expected.touchRequired;
 }
 
-export async function fill(tab, inlineDocument, enroll = false) {
+export async function fill(tab, inlineDocument, enroll = false, choice) {
   if (!tab?.id || filling) return { ok: false, message: "A code request is already in progress." };
   filling = true;
   const tabId = tab.id;
@@ -45,7 +58,9 @@ export async function fill(tab, inlineDocument, enroll = false) {
     const key = siteKey(origin);
     const { [key]: savedBinding } = await chrome.storage.local.get(key);
     const matches = enroll && inlineDocument && !savedBinding ? await suggestions(origin) : [];
-    const binding = enroll && matches.length === 1 ? { ...matches[0], prompt: true } : savedBinding;
+    const index = Number.isInteger(choice) ? choice : matches.length === 1 ? 0 : -1;
+    const selected = matches[index];
+    const binding = enroll && selected ? { ...selected, prompt: true } : savedBinding;
     if (!binding || (enroll && savedBinding)) throw new Error("Open YubiKey Fill to choose an account for this site.");
 
     let documentId = inlineDocument;
@@ -91,7 +106,7 @@ export async function fill(tab, inlineDocument, enroll = false) {
     const currentBinding = saved[key];
     const currentMatches = enroll ? await suggestions(origin) : [];
     const stillApproved = enroll
-      ? !currentBinding && currentMatches.length === 1 && sameAccount(currentMatches[0], binding)
+      ? !currentBinding && sameAccount(currentMatches[index], binding)
       : sameAccount(currentBinding, binding);
     const inlineAllowed = !inlineDocument || await canPrompt(origin, enroll ? binding : currentBinding);
     if (pageChanged || !current.active || !browserWindow.focused || current.url !== tab.url
@@ -131,27 +146,23 @@ export async function handlePrompt(message, sender) {
       || !sender.documentId || !sender.tab?.id || sender.tab.incognito) return { ok: false };
   const key = siteKey(origin);
   if (message.kind === "prompt-status") {
+    const [current, browserWindow] = await Promise.all([
+      chrome.tabs.get(sender.tab.id), chrome.windows.get(sender.tab.windowId),
+    ]);
+    if (!current.active || !browserWindow.focused || current.url !== sender.url || current.pendingUrl) return { ok: false };
     const { [key]: binding } = await chrome.storage.local.get(key);
     if (binding) return { ok: Boolean(await canPrompt(origin, binding)) };
     if (!await chrome.permissions.contains({ origins: [hostPattern(origin)] })) return { ok: false };
     const matches = await suggestions(origin);
-    if (matches.length) return { ok: true, setup: matches.length === 1 ? "unique" : "choose" };
+    if (matches.length === 1) return { ok: true, setup: "unique" };
+    if (matches.length > 1) return {
+      ok: true, setup: "choose",
+      choices: matches.map((entry) => entry.label.replace(/([\w.+-])[\w.+-]*@/g, "$1…@")),
+    };
     return { ok: false };
   }
-  if (message.kind === "prompt-choose") {
-    const current = await chrome.tabs.get(sender.tab.id);
-    if (!current.active || current.url !== sender.url || current.pendingUrl
-        || !await chrome.permissions.contains({ origins: [hostPattern(origin)] })
-        || (await suggestions(origin)).length < 2) return { ok: false };
-    try {
-      await chrome.action.openPopup({ windowId: sender.tab.windowId });
-      return { ok: true };
-    } catch {
-      return { ok: false, message: "Click the YubiKey Fill icon in Brave to choose your account." };
-    }
-  }
   if (message.kind === "prompt-fill" || message.kind === "prompt-enroll") {
-    return fill({ ...sender.tab, url: sender.url }, sender.documentId, message.kind === "prompt-enroll");
+    return fill({ ...sender.tab, url: sender.url }, sender.documentId, message.kind === "prompt-enroll", message.choice);
   }
   return { ok: false };
 }
@@ -171,42 +182,14 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }).catch((error) => reply({ ok: false, message: error.message }));
     return true;
   }
-  if (message?.kind === "panel-fill" && fromPanel) {
-    chrome.tabs.get(message.tabId).then((tab) => {
-      if (tab.active && httpsOrigin(tab.url) === message.origin) return fill(tab);
-      return { ok: false, message: "The login tab changed." };
-    }).then(reply, () => reply({ ok: false }));
-    return true;
-  }
-  if (!["prompt-status", "prompt-fill", "prompt-enroll", "prompt-choose"].includes(message?.kind)) return;
+  if (!["prompt-status", "prompt-fill", "prompt-enroll"].includes(message?.kind)) return;
   handlePrompt(message, sender).then(reply, () => reply({ ok: false }));
   return true;
 });
 
-function refreshPrompts() {
-  syncPrompts().catch(() => {}); // A subsequent change or startup retries registration.
+function removeLegacyRegistration() {
+  chrome.scripting.unregisterContentScripts({ ids: ["yubikey-inline"] }).catch(() => {});
 }
-
-async function completeDiscoveryGrant(added) {
-  // The browser permission dialog can take focus away from the toolbar popup.
-  const { preview, grantIntent } = await chrome.storage.session.get(["preview", "grantIntent"]);
-  if (!preview || !grantIntent || Date.now() - grantIntent > 120000) return;
-  const origins = [...new Set(Object.keys(preview).map(hostPattern))];
-  if (!origins.some((pattern) => added.origins?.includes(pattern))) return;
-  if (!await chrome.permissions.contains({ origins })) return;
-  await chrome.storage.local.set({ [SUGGESTIONS]: preview });
-  await chrome.storage.session.remove(["preview", "grantIntent"]);
-}
-
-chrome.runtime.onInstalled.addListener(refreshPrompts);
-chrome.runtime.onStartup.addListener(refreshPrompts);
-chrome.permissions.onAdded.addListener((added) => {
-  refreshPrompts();
-  completeDiscoveryGrant(added).catch(() => {});
-});
-chrome.permissions.onRemoved.addListener(refreshPrompts);
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (Object.hasOwn(changes, SUGGESTIONS)
-      || Object.keys(changes).some((key) => key.startsWith("site:")))) refreshPrompts();
-});
+chrome.runtime.onInstalled.addListener(removeLegacyRegistration);
+chrome.runtime.onStartup.addListener(removeLegacyRegistration);
 void chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});

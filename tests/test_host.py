@@ -45,6 +45,13 @@ class HostTest(unittest.TestCase):
         self.session.calculate_all.assert_called_once_with(timestamp=1)
         self.session.calculate_code.assert_not_called()
 
+    def test_passive_discovery_does_not_open_a_password_dialog(self):
+        self.session.locked = True
+        with self.assertRaisesRegex(HostError, "locked"):
+            process_request({"op": "discover"}, self.session)
+        self.session.validate.assert_not_called()
+        self.session.calculate_all.assert_not_called()
+
     def test_legacy_touch_pairing_cannot_be_downgraded(self):
         with self.assertRaisesRegex(HostError, "touch"):
             process_request(self.request(NO_TOUCH), self.session)
