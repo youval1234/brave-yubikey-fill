@@ -13,12 +13,12 @@ async function until(fn) {
   throw Error("Browser benchmark timed out");
 }
 async function connect(url) {
-  const socket = new WebSocket(url), pending = new Map(), events = {};
+  const socket = new WebSocket(url), pending = new Map(), events = new Map();
   let id = 0;
   await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
   socket.onmessage = ({ data }) => {
     const reply = JSON.parse(data);
-    if (reply.method) events[reply.method]?.(reply.params);
+    if (typeof reply.method === "string") events.get(reply.method)?.(reply.params);
     const handler = pending.get(reply.id);
     if (!handler) return;
     pending.delete(reply.id);
@@ -78,9 +78,9 @@ for (const mode of ["baseline", "extension"]) {
     }
     page = await connect((await targets()).find(t => t.type === "page").webSocketDebuggerUrl);
     await page.call("Emulation.setFocusEmulationEnabled", { enabled: true });
-    page.events["Fetch.requestPaused"] = async ({ requestId }) => {
+    page.events.set("Fetch.requestPaused", async ({ requestId }) => {
       await page.call("Fetch.fulfillRequest", { requestId, responseCode: 200, responseHeaders: [{ name: "Content-Type", value: "text/html" }], body: Buffer.from('<!doctype html><h1>Two-Step Verification</h1><input autocomplete="one-time-code">').toString("base64") });
-    };
+    });
     await page.call("Fetch.enable", { patterns: [{ urlPattern: "*" }] });
     await page.call("Page.navigate", { url: "https://www.amazon.com/ap/mfa" });
     await until(() => evaluate(page, 'document.readyState === "complete" && !!document.querySelector("input")'));

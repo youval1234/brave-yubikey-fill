@@ -22,11 +22,11 @@ async function until(fn,message) {
 async function connect(url) {
   const socket=new WebSocket(url);
   await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
-  const pending=new Map(),events={};
+  const pending=new Map(),events=new Map();
   let sequence=0;
   socket.onmessage=({data})=>{
     const reply=JSON.parse(data);
-    if(reply.method) events[reply.method]?.(reply.params);
+    if(typeof reply.method === "string") events.get(reply.method)?.(reply.params);
     const handler=pending.get(reply.id);
     if(!handler)return;
     pending.delete(reply.id);
@@ -70,9 +70,9 @@ try {
   await page.call("Page.bringToFront");
   await page.call("Emulation.setFocusEmulationEnabled",{enabled:true});
   let html="";
-  page.events["Fetch.requestPaused"]=async({requestId})=>{
+  page.events.set("Fetch.requestPaused", async({requestId})=>{
     await page.call("Fetch.fulfillRequest",{requestId,responseCode:200,responseHeaders:[{name:"Content-Type",value:"text/html"}],body:Buffer.from(html).toString("base64")});
-  };
+  });
   await page.call("Fetch.enable",{patterns:[{urlPattern:"*"}]});
   async function visit(url,markup) {
     await page.call("Input.dispatchMouseEvent",{type:"mouseMoved",x:0,y:0});
@@ -94,22 +94,54 @@ try {
     }
   }
   // Count extension work without timing-dependent CPU or heap assertions.
-  const isolated = async (func, args = []) => evaluate(worker,
-    `(async()=>{const [tab]=await chrome.tabs.query({active:true,currentWindow:true});return (await chrome.scripting.executeScript({target:{tabId:tab.id},func:${func},args:${JSON.stringify(args)}}))[0].result;})()`);
+  const workerGlobal = (await worker.call("Runtime.evaluate", {expression:"globalThis"})).result.objectId;
+  async function isolated(operation) {
+    const reply = await worker.call("Runtime.callFunctionOn", {
+      objectId: workerGlobal, awaitPromise: true, returnByValue: true,
+      arguments: [{value: operation}],
+      // Static code with structured arguments: no function/value interpolation.
+      functionDeclaration: `async function(operation) {
+        const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
+        const [injection] = await chrome.scripting.executeScript({
+          target:{tabId:tab.id}, args:[operation], func: operation => {
+            if (operation === "work-init") {
+              globalThis.workCounts = {fields:0,frames:0};
+              const field = yubiKeyFillField.field, frame = requestAnimationFrame;
+              yubiKeyFillField.field = (...args) => { workCounts.fields++; return field(...args); };
+              globalThis.requestAnimationFrame = (...args) => { workCounts.frames++; return frame(...args); };
+            } else if (operation === "work-read") return {...workCounts};
+            else if (operation === "observer-init") {
+              globalThis.activeObservers = 0;
+              const Observer = MutationObserver;
+              globalThis.MutationObserver = class extends Observer {
+                observe(...args) {
+                  super.observe(...args);
+                  if (!this.tracked) { this.tracked = true; activeObservers++; }
+                }
+                disconnect() {
+                  super.disconnect();
+                  if (this.tracked) { this.tracked = false; activeObservers--; }
+                }
+              };
+            } else if (operation === "observer-read") return activeObservers;
+            else throw Error("Unknown test operation");
+          }
+        });
+        return injection.result;
+      }`,
+    });
+    if (reply.exceptionDetails) throw Error(reply.exceptionDetails.text);
+    return reply.result.value;
+  }
   await visit("https://www.amazon.com/ap/mfa", '<input autocomplete="one-time-code"><div id="noise" style="height:60px">Unrelated content</div><div style="height:60px">Other content</div>');
   await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "watching"'), "No content script");
-  await isolated(() => {
-    globalThis.workCounts = { fields: 0, frames: 0 };
-    const field = yubiKeyFillField.field, frame = requestAnimationFrame;
-    yubiKeyFillField.field = (...args) => { workCounts.fields++; return field(...args); };
-    globalThis.requestAnimationFrame = (...args) => { workCounts.frames++; return frame(...args); };
-  });
+  await isolated("work-init");
   await evaluate(page, 'new Promise(resolve=>{let n=0;const timer=setInterval(()=>{document.querySelector("#noise").textContent=String(n++);if(n===60){clearInterval(timer);resolve();}},20);})');
   for (let n = 0; n < 20; n++) {
     await page.call("Input.dispatchMouseEvent", {type:"mouseMoved",x:10,y:n%2?40:110});
   }
   await pause(100);
-  const idleWork = await isolated(() => ({...workCounts}));
+  const idleWork = await isolated("work-read");
   console.log("Idle mutation and pointer benchmark:", JSON.stringify(idleWork));
   assert.deepEqual(idleWork, {fields:0,frames:0}, "Idle pages performed field scans or scheduled frames");
   for(const [url,markup,hoverIndex = 0] of [
@@ -170,22 +202,9 @@ try {
   await evaluate(worker,"backgroundWindow = false");
   await visit("https://www.amazon.com/ap/mfa", '<input autocomplete="one-time-code">');
   await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "watching"'), "No preview script");
-  await isolated(() => {
-    globalThis.activeObservers = 0;
-    const Observer = MutationObserver;
-    globalThis.MutationObserver = class extends Observer {
-      observe(...args) {
-        super.observe(...args);
-        if (!this.tracked) { this.tracked = true; activeObservers++; }
-      }
-      disconnect() {
-        super.disconnect();
-        if (this.tracked) { this.tracked = false; activeObservers--; }
-      }
-    };
-  });
+  await isolated("observer-init");
   const previewButton = await until(hoveredButton, "No hover preview");
-  assert.equal(await isolated(() => activeObservers), 1, "Expected one observer during hover");
+  assert.equal(await isolated("observer-read"), 1, "Expected one observer during hover");
   const {object:previewObject} = await page.call("DOM.resolveNode", {backendNodeId:previewButton.backendNodeId});
   const codeText = async () => (await page.call("Runtime.callFunctionOn", {
     objectId:previewObject.objectId,returnByValue:true,
@@ -201,7 +220,9 @@ try {
     const shot = await page.call("Page.captureScreenshot", {
       format:"png",clip:{x:Math.max(0,bounds.x-8),y:Math.max(0,bounds.y-8),width:bounds.width+16,height:bounds.height+16,scale:1},
     });
-    fs.writeFileSync(path.resolve(process.env.YUBIKEY_TEST_SCREENSHOT),Buffer.from(shot.data,"base64"));
+    const output = path.resolve(".artifacts/screenshots");
+    fs.mkdirSync(output, {recursive:true});
+    fs.writeFileSync(path.join(output, "hover-preview.png"),Buffer.from(shot.data,"base64"));
   }
   const firstCode = await codeText();
   await until(async () => (await codeText()) !== firstCode, "Preview did not refresh at expiry");
@@ -213,7 +234,7 @@ try {
   await pause(350);
   assert.equal(await findButton(),undefined,"Card stayed open after pointer left");
   assert.equal(await codeText(), "", "Closed card retained its displayed code");
-  assert.equal(await isolated(() => activeObservers), 0, "Observer stayed active after hover ended");
+  assert.equal(await isolated("observer-read"), 0, "Observer stayed active after hover ended");
   const stoppedAt = await evaluate(worker,"previews");
   await pause(1100);
   assert.equal(await evaluate(worker,"previews"),stoppedAt,"Preview requests continued after closing");

@@ -41,7 +41,9 @@ Only one YubiKey may be connected for a read. Account metadata is cached for up 
 
 ## Updates
 
-Version **0.7.4** adds regional marketplace matching and grouped digit boxes, including eBay's six-box layout. It uses the same helper as v0.7.3; no helper reinstall is needed for this update. See [regional support](docs/REGIONAL-SUPPORT.md).
+Version **0.7.5** adds the MIT license to the project and both release packages, plus hardening of the development test helpers. OTP behavior and the native helper are unchanged.
+
+Version 0.7.4 added regional marketplace matching and grouped digit boxes, including eBay's six-box layout. It uses the same helper as v0.7.3; no helper reinstall is needed for this update. See [regional support](docs/REGIONAL-SUPPORT.md).
 
 Version 0.7.3 added **Check for updates**, release packaging and security hardening. That update checker needs the v0.7.3 Windows helper. Existing OTP filling does not require a GitHub sign-in.
 
@@ -72,7 +74,7 @@ node tests/browser-smoke.mjs
 python -B tools/privacy_audit.py --history
 ```
 
-Run Python tests from an environment with `host/requirements.txt` installed. Browser tests use fresh isolated Brave profiles, intercepted fixture pages and dummy credentials; they make no live login attempt and remove their profiles afterward. `node tests/memory-smoke.mjs` measures approximate browser memory; screenshot output in browser smoke tests is opt-in via `YUBIKEY_TEST_SCREENSHOT`.
+Run Python tests from an environment with `host/requirements.txt` installed. Browser tests use fresh isolated Brave profiles, intercepted fixture pages and dummy credentials; they make no live login attempt and remove their profiles afterward. `node tests/memory-smoke.mjs` measures approximate browser memory. Set `YUBIKEY_TEST_SCREENSHOT=1` to save a dummy preview at the fixed ignored path `.artifacts/screenshots/hover-preview.png`; the variable does not control the output filename.
 
 After committing reviewed changes, run `python -B tools/build_release.py`. It archives only committed files into ignored `.artifacts/releases/VERSION/`, producing extension/source ZIPs and `SHA256SUMS.txt`. Scan those archives before uploading:
 
@@ -81,3 +83,7 @@ python -B tools/privacy_audit.py --archive PATH_TO_EXTENSION_ZIP --archive PATH_
 ```
 
 The pattern scanner supplements manual review; it does not establish that a project is vulnerability-free. See [SECURITY.md](SECURITY.md) for disclosure guidance.
+
+## License
+
+Original project code, documentation and artwork are provided under the [MIT License](LICENSE), copyright 2026 youval1234. Third-party dependencies retain their own licenses. The license does not grant rights to Yubico or Brave trademarks or imply endorsement.
