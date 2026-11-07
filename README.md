@@ -2,6 +2,8 @@
 
 Hardware-backed OTP autofill for **Brave on Windows**. Your YubiKey calculates the code; the extension helps you use it on the matching login page.
 
+**Experimental public preview.** This project has internal security tests and a documented review, but has not received an independent security audit. Release ZIPs have checksums and are currently unsigned. Review [the security policy](SECURITY.md) before using it with real accounts. This project is not affiliated with or endorsed by Yubico or Brave.
+
 ![Toolbar popup](docs/popup-preview.png)
 
 Hover over a supported code field to reveal the inline offer. See the code and time remaining, then click **Fill code**. Some websites verify automatically once all digits are entered; otherwise submit the form yourself. No per-site setup is needed for recognized providers with a unique matching account; multiple matches offer an account choice.
@@ -17,7 +19,7 @@ Hover over a supported code field to reveal the inline offer. See the code and t
 - Private-window support without saving new automatic site/account pairings.
 - Event-driven page observation and on-demand styles to reduce idle work.
 - Regional eBay/Amazon login domains and grouped six/eight-digit inputs, without IP or VPN-location checks.
-- Optional private GitHub release checks; no credentials bundled in the extension.
+- Optional GitHub release checks; no credentials bundled in the extension.
 
 ## Install
 
@@ -43,7 +45,7 @@ Version **0.7.4** adds regional marketplace matching and grouped digit boxes, in
 
 Version 0.7.3 added **Check for updates**, release packaging and security hardening. That update checker needs the v0.7.3 Windows helper. Existing OTP filling does not require a GitHub sign-in.
 
-For private release checks, install GitHub CLI and sign in to an account with access to this repository (`gh auth login --hostname github.com`), then run `Install.ps1`. The installer records only the resolved CLI executable path. Your authentication remains managed by GitHub CLI, outside the repository and browser extension.
+The current in-app checker uses an installed GitHub CLI and its local sign-in (`gh auth login --hostname github.com`); run `Install.ps1` after installing the CLI. The installer records only the resolved CLI executable path. Authentication remains managed by GitHub CLI, outside the repository and browser extension. The public release page and downloads can also be opened directly without signing in; GitHub CLI is not needed for OTP filling.
 
 Click **Check for updates** in the toolbar popup. It checks the latest published stable release only when clicked. If setup or access is unavailable, **View release on GitHub** opens the release page using your browser session.
 
@@ -59,7 +61,7 @@ The matched website can read a code once filled. Treat a content-script preview 
 
 Automatic offers need HTTPS site access. Matching uses exact known login hosts or an issuer explicitly naming an HTTPS origin; issuer labels are hints, not cryptographic proof of the service. Supported split inputs are one unambiguous, empty group of six/eight digit boxes with OTP semantics, plus eBay's named six-box layout. Unfamiliar providers, other custom controls and embedded frames may need adapters. See `extension/matching.js` for recognized hosts.
 
-The repository and its releases are currently private. Keep OTP seeds, recovery codes, personal screenshots, CLI authentication files and browser-profile data out of Git. Run `./Uninstall.ps1` to unregister the helper; remove the extension in Brave to clear its extension storage.
+The repository, commit history and published releases are public. Report vulnerabilities through [private security reporting](https://github.com/youval1234/brave-yubikey-fill/security/advisories/new). Keep OTP seeds, recovery codes, personal screenshots, CLI authentication files and browser-profile data out of Git. Run `./Uninstall.ps1` to unregister the helper; remove the extension in Brave to clear its extension storage.
 
 ## Verification and release building
 

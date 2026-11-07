@@ -1,10 +1,10 @@
 # Security policy
 
-This project is under active development. Security fixes target the latest release. The repository remains private pending further review; the checks documented here are not an independent security certification.
+This project is an experimental public preview under active development. Security fixes target the latest release. The checks documented here are not an independent security certification. Independent review and signed/attested release distribution remain outstanding; the project should not be described as audited, vulnerability-free or phishing-resistant.
 
 ## Reporting an issue
 
-Do not post OTPs, seeds, recovery codes, account labels, browser profiles, GitHub tokens or exploit details in public issues. Use GitHub's private vulnerability-reporting feature if available, or an established private channel with the maintainer. A dedicated private reporting channel must be verified before public distribution.
+Report a vulnerability privately using [GitHub's security-reporting form](https://github.com/youval1234/brave-yubikey-fill/security/advisories/new). Do not post OTPs, seeds, recovery codes, account labels, browser profiles, GitHub tokens or exploit details in public issues. If the reporting form is temporarily unavailable, wait for a private reporting channel rather than opening a public issue containing exploit details.
 
 Report the affected release, minimal reproduction using dummy accounts, expected/actual behavior and impact. Do not extract or send a real hardware secret to demonstrate an issue.
 
@@ -16,8 +16,8 @@ A filled code is available to the receiving website. Content-script previews sha
 
 Native Messaging origin checks restrict browser callers; a local program can imitate command-line arguments. They do not authenticate an executable against malware running as the same Windows user. GitHub CLI is an optional trusted local dependency for private release checks; its credentials are not copied into the extension.
 
-## Before public distribution
+## Before recommending production use
 
-Obtain an independent review, verify a private reporting channel and support policy, review publisher-account protections, and choose a signed/attested distribution strategy. ZIP hashes detect corruption against a trusted published checksum; they are not a digital signature and do not protect against a compromised publisher account. Do not describe this project as vulnerability-free or phishing-resistant.
+Obtain an independent review, maintain the private reporting channel and support policy, verify publisher-account protections, and choose a signed/attested distribution strategy. ZIP hashes detect corruption against a trusted published checksum; they are not a digital signature and do not protect against a compromised publisher account.
 
 See [the current review](docs/SECURITY-REVIEW.md) for tested controls, findings, scope and limits.

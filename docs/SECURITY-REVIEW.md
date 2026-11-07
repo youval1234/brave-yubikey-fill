@@ -1,5 +1,7 @@
 # Security and privacy review — 2026-11-07
 
+Publication note, 2026-11-08: the owner authorized publishing the repository as an experimental public preview. Visibility observations below describe the earlier private review, not the current access policy. The current security policy links to private vulnerability reporting. Independent review and signed/attested releases remain outstanding.
+
 Scope: v0.7.3 source, the preceding 12 reachable commits (114 distinct blobs), two unreachable local blobs, project files and images, GitHub repository settings, local helper registration, dependencies and release packaging. This is an internal source review and automated regression pass, not an independent penetration test or assurance that no vulnerabilities exist.
 
 ## Repository and privacy findings
@@ -44,4 +46,4 @@ Normal-window local storage contains site/account associations and account metad
 
 An attacker controlling an approved website can read a code filled there. Treat previews as available to a compromised renderer; a closed shadow root is not a security boundary. Stored issuer labels are not cryptographically verified domain identities. A malicious local process can access no-touch, unlocked OATH accounts independently, impersonate native-host arguments, read same-user files or alter installed code. The extension does not extract seed secrets through its APIs, but this review does not assess firmware or physical extraction attacks. TOTP remains susceptible to phishing/relay; use FIDO/passkeys where appropriate.
 
-There is no signed updater or store-distributed package in this release. Updates are checked, downloaded by the user and manually applied. Hash files are not signatures. Before public distribution, obtain independent review, establish private vulnerability reporting, verify account protections and consider signed/attested distribution. Keep the repository private until those decisions are complete.
+There is no signed updater or store-distributed package in this release. Updates are checked, downloaded by the user and manually applied. Hash files are not signatures. At review time, keeping the repository private was recommended pending independent review, private vulnerability reporting, account-protection checks and signed/attested distribution decisions. The owner subsequently authorized an experimental public preview; that publication does not resolve the outstanding assurance and signing work.
