@@ -1,8 +1,10 @@
 (() => {
   // This state lives in Brave's isolated world and is shared with the prompt.
-  if (globalThis.yubiKeyFillField) return;
+  const version = globalThis.chrome?.runtime?.getManifest?.().version || "test";
+  if (globalThis.yubiKeyFillField?.version === version) return;
   let pending;
   let clicked;
+  let hovered, hoverHost;
   const selector = [
     'input[autocomplete~="one-time-code" i]',
     'input#auth-mfa-otpcode[name="otpCode"]',
@@ -80,8 +82,14 @@
   }
 
   globalThis.yubiKeyFillField = {
+    version,
     field, probe, fill,
     markClick(input) { clicked = input; },
     clearClick() { clicked = null; },
+    markHover(input, host) { hovered = input; hoverHost = host; },
+    previewProbe(url) {
+      return location.href === url && document.hasFocus() && field() === hovered
+        && Boolean(hovered && (hovered.matches(":hover") || hoverHost?.matches(":hover")));
+    },
   };
 })();

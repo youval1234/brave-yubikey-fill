@@ -105,7 +105,7 @@ function reset() {
         if (request.op === "discover") return { ok: true, accounts: [] };
         events.push(["request", request]);
         state.duringTouch?.();
-        return { ok: true, code, expiresAt: Date.now() + 20_000 };
+        return { ok: true, code, expiresAt: Date.now() + 20_000, startsAt: Date.now() - 10_000 };
       },
     },
   };
@@ -165,6 +165,20 @@ test("same-document login redirects use the current page URL", async () => {
   assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, initialSender), { ok: true });
   assert.equal((await handlePrompt({ kind: "prompt-fill" }, initialSender)).ok, true);
   assert.ok(events.some(([type]) => type === "fill"));
+});
+
+test("preview requires a hovered field and foreground window and rechecks revocation", async () => {
+  for (const failure of ["none", "hover", "focus", "revoked"]) {
+    reset();
+    state.binding = { ...binding, prompt: true, touchRequired: false };
+    if (failure === "hover") state.probe = false;
+    if (failure === "focus") state.focused = false;
+    if (failure === "revoked") state.duringTouch = () => { state.binding = undefined; };
+    const result = await handlePrompt({ kind: "prompt-preview" }, sender);
+    assert.equal(result.ok, failure === "none");
+    assert.equal(events.some(([type]) => type === "request"), ["none", "revoked"].includes(failure));
+    assert.equal(events.some(([type]) => type === "fill"), false);
+  }
 });
 
 test("first-use offers are private until a valid enrollment click", async () => {

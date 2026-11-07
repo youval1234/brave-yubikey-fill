@@ -3,6 +3,47 @@ import { suggestionsForAccounts } from "./matching.js";
 
 let filling = false;
 let inventoryRequest;
+let previewing = false;
+
+async function preview(tab, documentId) {
+  if (previewing) return { ok: false };
+  previewing = true;
+  try {
+    const origin = httpsOrigin(tab.url);
+    const key = siteKey(origin);
+    const { [key]: binding } = await chrome.storage.local.get(key);
+    const matches = binding ? [binding] : await suggestions(origin);
+    if (matches.length !== 1 || binding?.prompt === false) return { ok: false };
+    const selected = matches[0];
+    if (selected.touchRequired !== false) return { ok: false, protected: true };
+    const target = { tabId: tab.id, documentIds: [documentId] };
+    const validContext = async () => {
+      const [current, browserWindow, allowed] = await Promise.all([
+        chrome.tabs.get(tab.id), chrome.windows.get(tab.windowId),
+        chrome.permissions.contains({ origins: [hostPattern(origin)] }),
+      ]);
+      if (!current.active || !browserWindow.focused || current.url !== tab.url || current.pendingUrl || !allowed) return false;
+      const [probe] = await chrome.scripting.executeScript({
+        target, func: (url) => globalThis.yubiKeyFillField?.previewProbe(url), args: [tab.url],
+      });
+      return probe?.result === true;
+    };
+    if (!await validContext()) return { ok: false };
+    const result = await requestHost({ op: "preview", device: selected.device, id: selected.id, requireTouch: false });
+    const { [key]: saved } = await chrome.storage.local.get(key);
+    const currentMatches = saved ? [saved] : await suggestions(origin);
+    if (saved?.prompt === false || currentMatches.length !== 1 || !sameAccount(currentMatches[0], selected)
+        || !await validContext()) return { ok: false };
+    if (typeof result.code !== "string" || !/^[0-9]{6,8}$/.test(result.code)
+        || !Number.isSafeInteger(result.expiresAt) || !Number.isSafeInteger(result.startsAt)
+        || result.expiresAt <= Date.now() || result.startsAt >= result.expiresAt) return { ok: false };
+    return { ok: true, code: result.code, expiresAt: result.expiresAt, startsAt: result.startsAt };
+  } catch {
+    return { ok: false };
+  } finally {
+    previewing = false;
+  }
+}
 
 async function status(tabId, text, title) {
   await Promise.all([
@@ -152,6 +193,7 @@ export async function handlePrompt(message, sender) {
     return { ok: false, retryAfterMs: 1000 };
   }
   const key = siteKey(origin);
+  if (message.kind === "prompt-preview") return preview(current, sender.documentId);
   if (message.kind === "prompt-status") {
     // Showing an offer only reads metadata. Foreground focus is enforced by
     // fill() when the user clicks, before generating and releasing a code.
@@ -188,7 +230,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
     }).catch((error) => reply({ ok: false, message: error.message }));
     return true;
   }
-  if (!["prompt-status", "prompt-fill", "prompt-enroll"].includes(message?.kind)) return;
+  if (!["prompt-status", "prompt-fill", "prompt-enroll", "prompt-preview"].includes(message?.kind)) return;
   handlePrompt(message, sender).then(reply, () => reply({ ok: false }));
   return true;
 });

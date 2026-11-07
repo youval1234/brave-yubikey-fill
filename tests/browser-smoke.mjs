@@ -63,7 +63,7 @@ try {
   const target=await until(async()=>(await targets()).find(t=>t.url==="chrome-extension://"+id+"/worker.js"),"No worker");
   worker=await connect(target.webSocketDebuggerUrl);
   await until(()=>evaluate(worker,'typeof chrome!=="undefined" && chrome.runtime?.id'),"No runtime");
-  await evaluate(worker, '(async()=>{await chrome.storage.local.clear();await chrome.storage.session.clear();globalThis.codes=0;chrome.runtime.sendNativeMessage=async(_host,request)=>{if(request.op==="discover")return {ok:true,accounts:[{device:"dummy",id:"ab",label:"Amazon · demo",touchRequired:false},{device:"dummy",id:"cd",label:"NVIDIA · demo",touchRequired:false}]};codes++;return {ok:true,code:"012345",expiresAt:Date.now()+25000};};})()');
+  await evaluate(worker, '(async()=>{await chrome.storage.local.clear();await chrome.storage.session.clear();globalThis.codes=0;globalThis.previews=0;chrome.runtime.sendNativeMessage=async(_host,request)=>{if(request.op==="discover")return {ok:true,accounts:[{device:"dummy",id:"ab",label:"Amazon · demo",touchRequired:false},{device:"dummy",id:"cd",label:"NVIDIA · demo",touchRequired:false}]};if(request.op==="preview"){previews++;return {ok:true,code:previews%2?"123456":"654321",startsAt:Date.now()-29350,expiresAt:Date.now()+650};}codes++;return {ok:true,code:"012345",expiresAt:Date.now()+25000};};})()');
   await evaluate(worker, '(async () => { const getWindow = chrome.windows.get; globalThis.backgroundWindow = true; chrome.windows.get = async (...args) => ({ ...await getWindow(...args), focused: !backgroundWindow }); })()');
   page=await connect((await targets()).find(t=>t.type==="page").webSocketDebuggerUrl);
   await page.call("Page.bringToFront");
@@ -74,11 +74,17 @@ try {
   };
   await page.call("Fetch.enable",{patterns:[{urlPattern:"*"}]});
   async function visit(url,markup) {
+    await page.call("Input.dispatchMouseEvent",{type:"mouseMoved",x:0,y:0});
     html="<!doctype html><meta charset=utf-8>"+markup;
     await page.call("Page.navigate",{url});
     await until(()=>evaluate(page,'document.readyState==="complete" && location.href==='+JSON.stringify(url)),"No fixture");
   }
   const findButton=async()=>buttonIn((await page.call("DOM.getDocument",{depth:-1,pierce:true})).root);
+  async function hoveredButton() {
+    const rect = await evaluate(page, '(() => { const input=document.querySelector("input"); if(!input)return null; const r=input.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width}; })()');
+    if (rect?.width) await page.call("Input.dispatchMouseEvent", { type:"mouseMoved", x:rect.x, y:rect.y });
+    return findButton();
+  }
   async function clickButton(button) {
     const {model}=await page.call("DOM.getBoxModel",{backendNodeId:button.backendNodeId});
     const x=(model.border[0]+model.border[4])/2,y=(model.border[1]+model.border[5])/2;
@@ -91,7 +97,9 @@ try {
     ["https://login.nvgs.nvidia.com/v1/security/challenge",'<form action="/verify"><h1>Security Challenge</h1><p>Launch your authentication app and generate a security code.</p><label for="code">Enter code</label><input id="code" placeholder="Please enter code"></form>']
   ]){
     await visit(url,markup);
-    const button=await until(findButton,"No automatic offer for "+url);
+    await pause(400);
+    assert.equal(await findButton(), undefined, "Card appeared before hovering");
+    const button=await until(hoveredButton,"No automatic offer for "+url);
     const before=await evaluate(worker,"codes");
     const {object}=await page.call("DOM.resolveNode",{backendNodeId:button.backendNodeId});
     await page.call("Runtime.callFunctionOn",{objectId:object.objectId,functionDeclaration:"function(){this.click();}"});
@@ -103,22 +111,22 @@ try {
     assert.equal(await evaluate(worker,"codes"),before+1);
     await evaluate(worker, "backgroundWindow = true");
     await page.call("Page.reload");
-    await until(findButton, "Offer disappeared after refreshing the login page");
+    await until(hoveredButton, "Offer disappeared after refreshing the login page");
     assert.equal(await evaluate(worker,"codes"),before+1,"Refresh generated a code");
   }
   await visit("https://login.nvgs.nvidia.com/v1/nfactor/totp-auth",
     '<style>.concealed { display: none; }</style><h1>Security Challenge</h1><label for="code_input">Enter code</label><input id="code_input" class="concealed" autocomplete="one-time-code">');
-  await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "waiting-for-field"'),
+  await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "watching"'),
     "Expected a hidden field to wait");
   await evaluate(page, 'document.querySelector("#code_input").classList.remove("concealed")');
-  await until(findButton, "Offer did not recover after a CSS-only field reveal");
+  await until(hoveredButton, "Offer did not recover after a CSS-only field reveal");
   assert.equal(await evaluate(page, 'document.querySelectorAll("[data-yubikey-fill-host]").length'), 1);
 
   await visit("https://login.nvgs.nvidia.com/v1/login/identifier", '<h1>Security Challenge</h1>');
-  await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "waiting-for-field"'),
+  await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "watching"'),
     "Expected the initial route to wait for the code field");
   await evaluate(page, 'history.replaceState({}, "", "/v1/nfactor/totp-auth?state=new"); document.body.insertAdjacentHTML("beforeend", \'<input autocomplete="one-time-code">\')');
-  const redirectedButton = await until(findButton, "Offer did not follow a same-document login redirect");
+  const redirectedButton = await until(hoveredButton, "Offer did not follow a same-document login redirect");
   const beforeRedirectFill = await evaluate(worker, "codes");
   await evaluate(worker, "backgroundWindow = false");
   await clickButton(redirectedButton);
@@ -129,14 +137,43 @@ try {
 
   await evaluate(worker, '(async () => { await chrome.storage.local.clear(); await chrome.storage.session.clear(); const native = chrome.runtime.sendNativeMessage; globalThis.keyUnavailable = true; chrome.runtime.sendNativeMessage = (...args) => args[1].op === "discover" && keyUnavailable ? Promise.resolve({ok:false,error:"device"}) : native(...args); })()');
   await visit("https://www.amazon.com/ap/mfa", '<input autocomplete="one-time-code">');
+  await hoveredButton();
   await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "unmatched-or-inactive"'),
     "Expected unavailable-key state");
   await evaluate(worker, "keyUnavailable = false");
-  await until(findButton, "Offer did not recover when the key became available");
+  await until(hoveredButton, "Offer did not recover when the key became available");
+  await evaluate(worker,"backgroundWindow = false");
+  await visit("https://www.amazon.com/ap/mfa", '<input autocomplete="one-time-code">');
+  const previewButton = await until(hoveredButton, "No hover preview");
+  const {object:previewObject} = await page.call("DOM.resolveNode", {backendNodeId:previewButton.backendNodeId});
+  const codeText = async () => (await page.call("Runtime.callFunctionOn", {
+    objectId:previewObject.objectId,returnByValue:true,
+    functionDeclaration:'function(){return this.getRootNode().querySelector(".code").textContent;}'
+  })).result.value;
+  await until(async () => /[0-9]/.test(await codeText()), "Preview did not render a code");
+  await pause(220);
+  const bounds = (await page.call("Runtime.callFunctionOn", {
+    objectId:previewObject.objectId,returnByValue:true,
+    functionDeclaration:'function(){const r=this.getRootNode().host.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};}'
+  })).result.value;
+  const shot = await page.call("Page.captureScreenshot", {
+    format:"png",clip:{x:Math.max(0,bounds.x-8),y:Math.max(0,bounds.y-8),width:bounds.width+16,height:bounds.height+16,scale:1},
+  });
+  const previewPath = path.join(profile,"hover-preview.png");
+  fs.writeFileSync(previewPath,Buffer.from(shot.data,"base64"));
+  console.log("Dummy preview screenshot:",previewPath);
+  const firstCode = await codeText();
+  await until(async () => (await codeText()) !== firstCode, "Preview did not refresh at expiry");
+  await page.call("Input.dispatchMouseEvent", {type:"mouseMoved",x:0,y:0});
+  await pause(350);
+  assert.equal(await findButton(),undefined,"Card stayed open after pointer left");
+  const stoppedAt = await evaluate(worker,"previews");
+  await pause(1100);
+  assert.equal(await evaluate(worker,"previews"),stoppedAt,"Preview requests continued after closing");
   await visit("https://www.amazon.com.attacker.test/login",'<input autocomplete="one-time-code">');
   await pause(300);
   assert.equal(await findButton(),undefined,"Lookalike received offer");
-  console.log("Automatic offers, background refresh, CSS-only reveal, key recovery, click-only fill and lookalike rejection passed.");
+  console.log("Hover-only offers, timed preview refresh, hover-out cleanup, safe fill and login regressions passed.");
 } finally {
   page?.close();worker?.close();browser.kill();
 }

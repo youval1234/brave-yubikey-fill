@@ -1,12 +1,12 @@
 # YubiKey Fill for Brave
 
-YubiKey Fill detects a supported OTP field on an HTTPS page, matches the exact site to an account on your connected YubiKey, and offers **Fill code** beside the field. Click the offer to calculate and fill the code, then submit the site's form. Multiple matching accounts appear as separate buttons with masked usernames.
+YubiKey Fill detects a supported OTP field on an HTTPS page and matches the exact site to an account on your connected YubiKey. Hover over the field for 280 ms to reveal a green-and-charcoal card. It shows the code and seconds remaining, refreshing the preview when it expires. Click **Fill code**, then submit the site's form. Multiple matching accounts appear as separate buttons with masked usernames.
 
 ## Install or update
 
 Load this checkout's `extension` directory at `brave://extensions`. Run `./Install.ps1 -ExtensionId YOUR_EXTENSION_ID` from this checkout to install the Windows helper. It needs Python 3.14 x64 with Tk and Windows .NET Framework.
 
-Version 0.6 detects fields automatically and requires HTTPS site access. Reload the extension and accept Brave's updated permission request if shown. Refresh existing login pages. The connected key is discovered automatically when a supported OTP field appears. Account metadata is cached in trusted extension session storage for up to one minute.
+Version 0.7 adds hover previews and needs the updated Windows helper. Run the installer, reload the extension and refresh existing login pages. The connected key is discovered when the pointer hovers over a supported field. Account metadata is cached in trusted extension session storage for up to one minute.
 
 The toolbar popup offers an optional **Refresh key accounts** action. **Manage pairings** is available for advanced use. Normal login use needs only a click on the inline offer.
 
@@ -14,7 +14,8 @@ The toolbar popup offers an optional **Refresh key accounts** action. **Manage p
 
 - HTTPS site access lets the content script detect OTP fields. Account matching checks exact known login hosts or an issuer that explicitly names an HTTPS origin. It never uses a substring match against a brand name in the site's hostname.
 - Passive discovery reads account metadata using an expired challenge and never requests a current code. A password-locked OATH application returns a locked result without opening a password dialog. Unlocking that application requires the user's OATH password.
-- A trusted click on the offer is required before requesting a current code. The worker checks the top-level sender, active tab, document, exact field, destination origin, account selection and code expiry. The helper checks the particular key and credential.
+- Hovering requests a current code for preview only while the field or card is under the pointer in the foreground tab. Preview requests stop when the card closes or the page loses focus. A trusted click is required to fill the form. The worker checks the top-level sender, active tab, document, exact field, destination origin, account selection and code expiry. The helper checks the particular key and credential.
+- Previews apply to a uniquely matched account without hardware touch. Password-protected or touch-required accounts keep their protections and use the Fill code action. Codes with a configured length of eight digits retain their full length.
 - TOTP secrets stay on the hardware. Codes and passwords are handled transiently. There is no app logging, clipboard use, remote service or persistent password cache. The login page can read the code once filled. Malware running as the local Windows user remains within the trust boundary.
 - Existing hardware touch policies are preserved. Credentials without a touch requirement fill after the browser click. The extension never changes the key's configuration.
 - Supported inputs include standard one-time-code autocomplete fields, common OTP field names, and a single code field in an authentication-app challenge. Unfamiliar markup, split inputs and embedded frames may need further adapters.

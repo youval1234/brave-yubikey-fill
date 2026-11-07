@@ -5,6 +5,12 @@ p { margin: 8px 0; }
 #origin { font-weight: 650; overflow-wrap: anywhere; }
 select { display: block; width: 100%; margin: 5px 0 8px; }
 .actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0; }
-#enable, #fill, #use { background: #c6a9ff; color: #211436; border: 1px solid #7755a7; border-radius: 7px; }
+#enable, #fill, #use { background: #9aca60; color: #14200d; border: 1px solid #7755a7; border-radius: 7px; }
 #domains { max-height: 150px; overflow-y: auto; padding-inline-start: 1.5rem; }
 #status, a, summary { font-size: 13px; }
+
+body { background: #202620; color: #f2f5ef; }
+a { color: #b6df86; }
+button { background: #9aca60; color: #14200d; border: 1px solid #587b31; border-radius: 7px; cursor: pointer; }
+button:hover { background: #b6df86; }
+button:disabled { opacity: .6; cursor: default; }

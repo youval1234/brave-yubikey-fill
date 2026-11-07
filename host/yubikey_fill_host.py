@@ -27,7 +27,7 @@ def read_request(stream):
     if request in ({"op": "accounts"}, {"op": "discover"}):
         return request
     code_fields = {"op", "device", "id"}
-    if (request.keys() in (code_fields, code_fields | {"requireTouch"}) and request["op"] == "code"
+    if (request.keys() in (code_fields, code_fields | {"requireTouch"}) and request["op"] in ("code", "preview")
             and isinstance(request.get("requireTouch", True), bool)
             and isinstance(request["device"], str)
             and re.fullmatch(r"[A-Za-z0-9+/]{22}", request["device"])
@@ -66,9 +66,9 @@ def unlock(session):
 def process_request(request, session):
     from yubikit.oath import OATH_TYPE
 
-    if request["op"] == "code" and request["device"] != session.device_id:
+    if request["op"] in ("code", "preview") and request["device"] != session.device_id:
         raise HostError("device")
-    if request["op"] == "discover" and session.locked:
+    if request["op"] in ("discover", "preview") and session.locked:
         raise HostError("locked")
     unlock(session)
 
@@ -89,15 +89,20 @@ def process_request(request, session):
     credential = next((entry for entry in credentials if entry.id.hex() == request["id"]), None)
     if credential is None:
         raise HostError("credential")
+    if request["op"] == "preview" and credential.touch_required is not False:
+        raise HostError("touch")
     if request.get("requireTouch", True) and credential.touch_required is not True:
         raise HostError("touch")
 
     code = session.calculate_code(credential)
-    if code.valid_to - time() <= 3:
+    if code.valid_to - time() <= (0 if request["op"] == "preview" else 3):
         raise HostError("expired")
     if not re.fullmatch(r"[0-9]{6,8}", code.value):
         raise HostError("hardware")
-    return {"ok": True, "code": code.value, "expiresAt": code.valid_to * 1000}
+    result = {"ok": True, "code": code.value, "expiresAt": code.valid_to * 1000}
+    if request["op"] == "preview":
+        result["startsAt"] = code.valid_from * 1000
+    return result
 
 
 def handle(request):

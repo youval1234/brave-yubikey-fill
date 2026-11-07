@@ -52,6 +52,25 @@ class HostTest(unittest.TestCase):
         self.session.validate.assert_not_called()
         self.session.calculate_all.assert_not_called()
 
+    def test_preview_preserves_password_and_touch_requirements(self):
+        request = {**self.request(), "op": "preview", "requireTouch": False}
+        with self.assertRaisesRegex(HostError, "touch"):
+            process_request(request, self.session)
+        self.session.calculate_code.assert_not_called()
+        self.session.locked = True
+        with self.assertRaisesRegex(HostError, "locked"):
+            process_request(request, self.session)
+        self.session.validate.assert_not_called()
+
+    def test_preview_returns_validity_window_for_no_touch_account(self):
+        expiry = int(time()) + 1
+        self.session.calculate_code.return_value = Code("012345", expiry - 30, expiry)
+        request = {**self.request(NO_TOUCH), "op": "preview", "requireTouch": False}
+        self.assertEqual(process_request(request, self.session), {
+            "ok": True, "code": "012345", "expiresAt": expiry * 1000,
+            "startsAt": (expiry - 30) * 1000,
+        })
+
     def test_legacy_touch_pairing_cannot_be_downgraded(self):
         with self.assertRaisesRegex(HostError, "touch"):
             process_request(self.request(NO_TOUCH), self.session)

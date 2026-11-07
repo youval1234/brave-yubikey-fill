@@ -14,6 +14,9 @@
   let checking = false;
   let scanRequested = false;
   let disposed = false;
+  let hoverInput, hoverTimer, leaveTimer, previewTimer;
+  let hoverReadyAt = 0;
+  let codeDisplay, countdown, progress;
   const lifetime = new AbortController();
 
   function listen(target, type, handler, options = {}) {
@@ -25,36 +28,79 @@
     :host { all: initial; }
     .card {
       box-sizing: border-box; display: grid; gap: 12px; padding: 13px;
-      background: #1b1727; color: #f6f3ff; border: 1px solid #554370;
-      border-radius: 15px; box-shadow: 0 10px 34px #160e2d66, 0 1px 4px #0004;
+      background: #202620; color: #f2f5ef; border: 1px solid #4f643c;
+      border-radius: 15px; box-shadow: 0 10px 34px #0c140d55, 0 1px 4px #0004;
       font: 13px/1.4 system-ui, sans-serif; color-scheme: dark;
     }
+    @keyframes enter { from { opacity: 0; transform: translateY(-5px) scale(.98); } to { opacity: 1; transform: none; } }
+    .card { animation: enter 180ms cubic-bezier(.2,.8,.2,1); }
+    .preview { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px; background: #141a15; border-radius: 8px; }
+    .code { font: 700 25px/1.2 ui-monospace, monospace; letter-spacing: 2px; color: #e5f3da; }
+    .timer { font: 600 12px/1 system-ui, sans-serif; color: #acd679; min-width: 28px; text-align: right; }
+    .track { height: 3px; background: #2b382b; overflow: hidden; border-radius: 2px; }
+    .progress { height: 100%; background: #94ce58; transform-origin: left; transition: transform 250ms linear; }
+    .fill { transition: background 120ms, transform 120ms; }
+    .fill:active { transform: scale(.98); }
+    @media (prefers-reduced-motion: reduce) { .card { animation: none; } .fill, .progress { transition: none; } }
     .header { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
     .logo { width: 34px; height: 34px; display: block; }
     .title { font-size: 14px; font-weight: 720; }
-    .detail { color: #cfc4e5; overflow-wrap: anywhere; }
+    .detail { color: #b6c3ac; overflow-wrap: anywhere; }
     button { font: inherit; cursor: pointer; border: 0; }
     .dismiss {
       width: 27px; height: 27px; border-radius: 8px; font-size: 18px; line-height: 1;
-      align-self: start; background: transparent; color: #d6c9ec;
+      align-self: start; background: transparent; color: #c5d1ba;
     }
-    .dismiss:hover { background: #342943; }
+    .dismiss:hover { background: #34432b; }
     .fill {
       min-height: 36px; padding: 7px 12px; border-radius: 9px;
-      background: #c6a9ff; color: #211436; font-weight: 700;
+      background: #9aca60; color: #14200d; font-weight: 700;
     }
-    .fill:hover { background: #dac8ff; }
-    .fill:disabled { background: #413456; color: #e8dcff; cursor: default; }
-    button:focus-visible { outline: 2px solid #f2e9ff; outline-offset: 2px; }
+    .fill:hover { background: #b6df86; }
+    .fill:disabled { background: #3b4931; color: #dce8d3; cursor: default; }
+    button:focus-visible { outline: 2px solid #bfe58e; outline-offset: 2px; }
   `);
   document.documentElement.dataset.yubikeyFillState = "watching";
 
   function close() {
     generation++;
     clearTimeout(dismissTimer);
+    clearTimeout(previewTimer);
+    clearTimeout(hoverTimer);
+    controls.markHover(null);
     observer?.disconnect();
     host?.remove();
     host = anchor = undefined;
+  }
+
+  async function refreshPreview() {
+    if (!host || !hoverInput || document.hidden || waiting) return;
+    const currentHost = host;
+    try {
+      const result = await chrome.runtime.sendMessage({ kind: "prompt-preview" });
+      if (host !== currentHost) return;
+      if (!result?.ok) {
+        codeDisplay.textContent = "••• •••";
+        countdown.textContent = "";
+        detail.textContent = result?.protected ? "Click Fill code to use this protected account." : "Preview unavailable. Click Fill code to try.";
+        previewTimer = setTimeout(refreshPreview, 3000);
+        return;
+      }
+      codeDisplay.textContent = result.code.replace(/(.{3})(?=.)/g, "$1 ");
+      const tick = () => {
+        if (host !== currentHost || !hoverInput || document.hidden) return;
+        const remaining = result.expiresAt - Date.now();
+        countdown.textContent = Math.max(0, Math.ceil(remaining / 1000)) + "s";
+        progress.style.transform = "scaleX(" + Math.max(0, Math.min(1, remaining / (result.expiresAt - result.startsAt))) + ")";
+        if (remaining <= 0) {
+          codeDisplay.textContent = "••• •••";
+          void refreshPreview();
+        } else previewTimer = setTimeout(tick, Math.min(250, remaining));
+      };
+      tick();
+    } catch {
+      if (host === currentHost) previewTimer = setTimeout(refreshPreview, 3000);
+    }
   }
 
   function position() {
@@ -126,6 +172,7 @@
     setupMode = setup;
     host = document.createElement("div");
     host.dataset.yubikeyFillHost = version;
+    controls.markHover(input, host);
     host.style.setProperty("all", "initial", "important");
     host.style.setProperty("position", "fixed", "important");
     host.style.setProperty("display", "block", "important");
@@ -143,11 +190,10 @@
     logo.setAttribute("aria-hidden", "true");
     // Static geometry, with no data from the page.
     for (const [tag, attributes] of [
-      ["rect", { x: 2, y: 2, width: 60, height: 60, rx: 17, fill: "#26193f", stroke: "#9d75ff", "stroke-width": 3 }],
-      ["path", { d: "M31 30l-13 13v8h8v-5h5v-5l8-8z", fill: "#c6a9ff" }],
-      ["circle", { cx: 38, cy: 24, r: 12, fill: "#c6a9ff" }],
-      ["circle", { cx: 38, cy: 24, r: 4, fill: "#26193f" }],
-      ["path", { d: "M49 10l2 5 5 2-5 2-2 5-2-5-5-2 5-2z", fill: "#8ef5df" }],
+      ["rect", { x: 20, y: 2, width: 24, height: 20, rx: 3, fill: "#b4bcb0" }],
+      ["rect", { x: 16, y: 16, width: 32, height: 46, rx: 9, fill: "#252e20", stroke: "#8cbd53", "stroke-width": 2 }],
+      ["circle", { cx: 32, cy: 38, r: 10, fill: "#8cbd53" }],
+      ["circle", { cx: 32, cy: 38, r: 4, fill: "#28351e" }],
     ]) {
       const part = document.createElementNS(logo.namespaceURI, tag);
       for (const [name, value] of Object.entries(attributes)) part.setAttribute(name, value);
@@ -171,6 +217,18 @@
     fillButton.addEventListener("click", (event) => { void requestCode(event); });
     header.append(logo, copy, dismiss);
     card.append(header);
+    if (!choices?.length) {
+      const preview = element("div", "preview");
+      codeDisplay = element("span", "code", "••• •••");
+      codeDisplay.setAttribute("aria-label", "One-time code");
+      countdown = element("span", "timer", "");
+      countdown.setAttribute("aria-label", "Code expires in");
+      preview.append(codeDisplay, countdown);
+      const track = element("div", "track");
+      progress = element("div", "progress");
+      track.append(progress);
+      card.append(preview, track);
+    }
     if (choices?.length) {
       for (const [index, label] of choices.entries()) {
         const button = element("button", "fill", label);
@@ -188,6 +246,7 @@
     if (host) {
       observer = new MutationObserver(position);
       observer.observe(document.documentElement, { subtree: true, childList: true });
+      if (!choices?.length) void refreshPreview();
     }
   }
 
@@ -215,9 +274,10 @@
   }
 
   async function offer() {
-    if (disposed || host || waiting || checking || document.hidden) return;
+    if (disposed || host || waiting || checking || document.hidden || !hoverInput) return;
     const input = controls.field();
-    if (!input || input === dismissed) {
+    if (!input || input !== hoverInput || input === dismissed || !input.matches(":hover")
+        || performance.now() < hoverReadyAt) {
       document.documentElement.dataset.yubikeyFillState = "waiting-for-field";
       return;
     }
@@ -230,7 +290,7 @@
       const result = await chrome.runtime.sendMessage({ kind: "prompt-status" });
       if (disposed) return;
       document.documentElement.dataset.yubikeyFillState = result?.ok ? "matched" : "unmatched-or-inactive";
-      if (attempt !== generation || location.href !== url || controls.field() !== input) {
+      if (attempt !== generation || location.href !== url || controls.field() !== input || hoverInput !== input) {
         scanRequested = true;
         return;
       }
@@ -275,6 +335,37 @@
     if (event.target !== dismissed && event.target !== host) dismissed = undefined;
     scheduleScan();
   }, { capture: true });
+  listen(document, "pointerover", (event) => {
+    if (!event.isTrusted) return;
+    if (event.target === host) {
+      clearTimeout(leaveTimer);
+      hoverInput = anchor;
+      controls.markHover(anchor, host);
+      return;
+    }
+    const input = controls.field();
+    if (event.target !== input || !input) return;
+    clearTimeout(leaveTimer);
+    hoverInput = input;
+    hoverReadyAt = performance.now() + 280;
+    controls.markHover(input, host);
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(scheduleScan, 280);
+  }, { capture: true });
+  listen(document, "pointerout", (event) => {
+    if (!event.isTrusted || (event.target !== hoverInput && event.target !== host)) return;
+    if (event.relatedTarget === anchor || event.relatedTarget === host) return;
+    clearTimeout(hoverTimer);
+    clearTimeout(leaveTimer);
+    leaveTimer = setTimeout(() => {
+      hoverInput = undefined;
+      close();
+    }, 180);
+  }, { capture: true });
+  listen(window, "blur", () => {
+    hoverInput = undefined;
+    close();
+  });
   listen(document, "pointerdown", (event) => {
     if (host && event.target !== host && event.target !== anchor) close();
     scheduleScan();
@@ -311,6 +402,7 @@
   globalThis.yubiKeyFillDispose = () => {
     disposed = true;
     lifetime.abort();
+    clearTimeout(leaveTimer);
     chrome.runtime.onMessage.removeListener(onMessage);
     stopWatching();
     close();
