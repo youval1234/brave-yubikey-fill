@@ -144,14 +144,17 @@ export async function handlePrompt(message, sender) {
   if (sender.id !== chrome.runtime.id || !origin || sender.origin !== origin
       || sender.frameId !== 0 || sender.documentLifecycle !== "active"
       || !sender.documentId || !sender.tab?.id || sender.tab.incognito) return { ok: false };
+  // MessageSender.url can describe the document's initial route after a
+  // history.pushState/replaceState redirect. Use the browser's current URL
+  // and keep the sender's exact origin and documentId as the trust boundary.
+  const current = await chrome.tabs.get(sender.tab.id);
+  if (!current.active || httpsOrigin(current.url) !== origin || current.pendingUrl) {
+    return { ok: false, retryAfterMs: 1000 };
+  }
   const key = siteKey(origin);
   if (message.kind === "prompt-status") {
     // Showing an offer only reads metadata. Foreground focus is enforced by
     // fill() when the user clicks, before generating and releasing a code.
-    const current = await chrome.tabs.get(sender.tab.id);
-    if (!current.active || current.url !== sender.url || current.pendingUrl) {
-      return { ok: false, retryAfterMs: 1000 };
-    }
     const { [key]: binding } = await chrome.storage.local.get(key);
     if (binding) return { ok: Boolean(await canPrompt(origin, binding)) };
     if (!await chrome.permissions.contains({ origins: [hostPattern(origin)] })) return { ok: false };
@@ -165,7 +168,7 @@ export async function handlePrompt(message, sender) {
     return inventory?.retry ? { ok: false, retryAfterMs: 5000 } : { ok: false };
   }
   if (message.kind === "prompt-fill" || message.kind === "prompt-enroll") {
-    return fill({ ...sender.tab, url: sender.url }, sender.documentId, message.kind === "prompt-enroll", message.choice);
+    return fill(current, sender.documentId, message.kind === "prompt-enroll", message.choice);
   }
   return { ok: false };
 }

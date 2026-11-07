@@ -158,6 +158,15 @@ test("a visible login tab can offer fill while another application has focus", a
   assert.equal(events.some(([type]) => type === "request"), false);
 });
 
+test("same-document login redirects use the current page URL", async () => {
+  reset();
+  state.binding = { ...binding, prompt: true };
+  const initialSender = { ...sender, url: site + "/identifier?state=previous" };
+  assert.deepEqual(await handlePrompt({ kind: "prompt-status" }, initialSender), { ok: true });
+  assert.equal((await handlePrompt({ kind: "prompt-fill" }, initialSender)).ok, true);
+  assert.ok(events.some(([type]) => type === "fill"));
+});
+
 test("first-use offers are private until a valid enrollment click", async () => {
   reset();
   state.binding = undefined;

@@ -114,6 +114,19 @@ try {
   await until(findButton, "Offer did not recover after a CSS-only field reveal");
   assert.equal(await evaluate(page, 'document.querySelectorAll("[data-yubikey-fill-host]").length'), 1);
 
+  await visit("https://login.nvgs.nvidia.com/v1/login/identifier", '<h1>Security Challenge</h1>');
+  await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "waiting-for-field"'),
+    "Expected the initial route to wait for the code field");
+  await evaluate(page, 'history.replaceState({}, "", "/v1/nfactor/totp-auth?state=new"); document.body.insertAdjacentHTML("beforeend", \'<input autocomplete="one-time-code">\')');
+  const redirectedButton = await until(findButton, "Offer did not follow a same-document login redirect");
+  const beforeRedirectFill = await evaluate(worker, "codes");
+  await evaluate(worker, "backgroundWindow = false");
+  await clickButton(redirectedButton);
+  await until(() => evaluate(page, 'document.querySelector("input").value === "012345"'),
+    "The redirected route did not accept click-to-fill");
+  assert.equal(await evaluate(worker, "codes"), beforeRedirectFill + 1);
+  await evaluate(worker, "backgroundWindow = true");
+
   await evaluate(worker, '(async () => { await chrome.storage.local.clear(); await chrome.storage.session.clear(); const native = chrome.runtime.sendNativeMessage; globalThis.keyUnavailable = true; chrome.runtime.sendNativeMessage = (...args) => args[1].op === "discover" && keyUnavailable ? Promise.resolve({ok:false,error:"device"}) : native(...args); })()');
   await visit("https://www.amazon.com/ap/mfa", '<input autocomplete="one-time-code">');
   await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "unmatched-or-inactive"'),

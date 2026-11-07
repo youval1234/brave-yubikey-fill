@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YubiKey Fill",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Fill an approved site's one-time code from your YubiKey.",
   "minimum_chrome_version": "106",
   "permissions": ["activeTab", "scripting", "storage", "nativeMessaging"],
