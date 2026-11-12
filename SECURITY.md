@@ -12,6 +12,8 @@ Report the affected release, minimal reproduction using dummy accounts, expected
 
 The extension checks exact HTTPS origins, active top-level documents, focused windows, permissions, the selected key/credential and a trusted click before inline filling. Preview is an explicit hover feature and generates a current OTP without a click for eligible no-touch, unlocked accounts. Native touch/password policies are preserved.
 
+From v0.7.6, the same trusted **Fill & submit** click also authorizes a submission attempt. The worker rechecks the tab, focus, permission and pairing after filling; the page-side one-use token binds the original controls, values, form, default submitter and destination. Submission is skipped when these change or controls are disabled. An observed automatic form submission is not repeated. Custom form-less widgets receive synthetic Enter events on their filled input; some custom sites can still require manual input. No global keyboard automation or debugger permission is used.
+
 A filled code is available to the receiving website. Content-script previews share a renderer with the website; shadow DOM does not provide a confidentiality boundary. Account metadata and saved pairings are local sensitive data. Local malware, browser compromise, compromised legitimate sites and hardware/firmware attacks are outside this project's isolation guarantees.
 
 Native Messaging origin checks restrict browser callers; a local program can imitate command-line arguments. They do not authenticate an executable against malware running as the same Windows user. GitHub CLI is an optional trusted local dependency for private release checks; its credentials are not copied into the extension.

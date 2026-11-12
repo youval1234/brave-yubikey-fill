@@ -16,6 +16,8 @@
   let disposed = false;
   let hoverInput, hoverTarget, hoverTimer, leaveTimer, previewTimer;
   let hoverReadyAt = 0;
+  const hoverDelay = 120;
+  let offerResult;
   let codeDisplay, countdown, progress;
   const lifetime = new AbortController();
 
@@ -69,6 +71,7 @@
 
   function close() {
     generation++;
+    offerResult = undefined;
     clearTimeout(dismissTimer);
     clearTimeout(previewTimer);
     clearTimeout(hoverTimer);
@@ -78,7 +81,7 @@
     host?.remove();
     host = anchor = undefined;
     shadow = detail = fillButton = codeDisplay = countdown = progress = undefined;
-    if (!hoverInput?.isConnected) hoverInput = hoverTarget = undefined;
+    if (!hoverInput?.isConnected || !controls.isHovered()) hoverInput = hoverTarget = undefined;
     if (!dismissed?.isConnected) dismissed = undefined;
     if (!hoverInput) stopWatching();
   }
@@ -92,7 +95,7 @@
       if (!result?.ok) {
         codeDisplay.textContent = "••• •••";
         countdown.textContent = "";
-        detail.textContent = result?.protected ? "Click Fill code to use this protected account." : "Preview unavailable. Click Fill code to try.";
+        detail.textContent = result?.protected ? "Click Fill & submit to use this protected account." : "Preview unavailable. Click Fill & submit to try.";
         previewTimer = setTimeout(refreshPreview, 3000);
         return;
       }
@@ -173,7 +176,6 @@
     fillButton.textContent = result?.ok ? "Code filled" : "Try again";
     fillButton.disabled = Boolean(result?.ok);
     if (result?.ok) {
-      dismissed = requestedField;
       dismissTimer = setTimeout(close, 1800);
     } else {
       position();
@@ -214,7 +216,8 @@
     }
 
     const copy = element("div", "copy");
-    detail = element("div", "detail", setup ? "Match found for " + location.hostname : "Use your security key");
+    detail = element("div", "detail", choices?.length ? "Choose an account to fill & submit"
+      : setup ? "Match found for " + location.hostname : "Use your security key");
     detail.setAttribute("role", "status");
     copy.append(element("div", "title", "YubiKey Fill"), detail);
     const dismiss = element("button", "dismiss", "×");
@@ -225,7 +228,7 @@
       dismissed = input;
       close();
     });
-    fillButton = element("button", "fill", "Fill code");
+    fillButton = element("button", "fill", "Fill & submit");
     fillButton.type = "button";
     fillButton.addEventListener("click", (event) => { void requestCode(event); });
     header.append(logo, copy, dismiss);
@@ -285,8 +288,7 @@
   async function offer() {
     if (disposed || host || waiting || checking || document.hidden || !hoverInput) return;
     const input = controls.field();
-    if (!input || input !== hoverInput || input === dismissed || !controls.isHovered()
-        || performance.now() < hoverReadyAt) {
+    if (!input || input !== hoverInput || input === dismissed || !controls.isHovered()) {
       document.documentElement.dataset.yubikeyFillState = "waiting-for-field";
       return;
     }
@@ -296,14 +298,22 @@
     const url = location.href;
     try {
       document.documentElement.dataset.yubikeyFillState = "checking-key";
-      const result = await chrome.runtime.sendMessage({ kind: "prompt-status" });
+      const result = offerResult?.input === input && offerResult.url === url ? offerResult.result
+        : await chrome.runtime.sendMessage({ kind: "prompt-status" });
       if (disposed) return;
       document.documentElement.dataset.yubikeyFillState = result?.ok ? "matched" : "unmatched-or-inactive";
-      if (attempt !== generation || location.href !== url || controls.field() !== input || hoverInput !== input) {
+      if (attempt !== generation || location.href !== url || controls.field() !== input || hoverInput !== input || !controls.isHovered()) {
         scanRequested = true;
         return;
       }
-      if (result?.ok) show(input, result.setup, result.choices);
+      if (result?.ok && performance.now() < hoverReadyAt) {
+        offerResult = {input, url, result};
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(scheduleScan, Math.ceil(hoverReadyAt - performance.now()));
+      } else if (result?.ok) {
+        offerResult = undefined;
+        show(input, result.setup, result.choices);
+      }
       else if (Number.isFinite(result?.retryAfterMs)) {
         retryTimer = setTimeout(scheduleScan, Math.max(1000, result.retryAfterMs));
       }
@@ -358,13 +368,21 @@
     if (!input) return;
     clearTimeout(leaveTimer);
     hoverTarget = event.target;
-    if (input === hoverInput && host) return;
+    if (input === hoverInput) {
+      if (!host) {
+        startWatching();
+        clearTimeout(hoverTimer);
+        hoverTimer = setTimeout(scheduleScan, Math.max(0, Math.ceil(hoverReadyAt - performance.now())));
+      }
+      return;
+    }
+    offerResult = undefined;
     hoverInput = input;
-    hoverReadyAt = performance.now() + 280;
+    hoverReadyAt = performance.now() + hoverDelay;
     controls.markHover(input, host);
     startWatching();
     clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(scheduleScan, 280);
+    hoverTimer = setTimeout(scheduleScan, hoverDelay);
   }, { capture: true });
   listen(document, "pointerout", (event) => {
     if (!event.isTrusted || (event.target !== hoverTarget && event.target !== host)) return;

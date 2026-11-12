@@ -86,6 +86,7 @@ function sameAccount(current, expected) {
 
 export async function fill(tab, inlineDocument, enroll = false, choice) {
   if (!tab?.id || filling) return { ok: false, message: "A code request is already in progress." };
+  tab = {...tab}; // Preserve the original browser snapshot across async stages.
   filling = true;
   const tabId = tab.id;
   let pageChanged = false;
@@ -172,7 +173,28 @@ export async function fill(tab, inlineDocument, enroll = false, choice) {
       const { [key]: alreadyPaired } = await chrome.storage.local.get(key);
       if (!alreadyPaired) await chrome.storage.local.set({ [key]: binding });
     }
-    const message = "Code filled. Review the form and submit.";
+    let submitted = false;
+    // Filling can itself navigate or start verification. Do not send an extra
+    // submission into another document, an inactive tab or a revoked pairing.
+    const [submitTab, submitWindow, submitSaved, submitPermission] = await Promise.all([
+      chrome.tabs.get(tabId), chrome.windows.get(tab.windowId), chrome.storage.local.get(key),
+      chrome.permissions.contains({ origins: [hostPattern(origin)] }),
+    ]);
+    const submitBinding = submitSaved[key];
+    const submitMatches = enroll && !submitBinding ? await suggestions(origin) : [];
+    const submitApproved = submitBinding ? sameAccount(submitBinding, binding)
+      : enroll && sameAccount(submitMatches[index], binding);
+    if (!pageChanged && sameContext(submitTab) && submitTab.active && submitWindow.focused
+        && submitTab.url === tab.url && !submitTab.pendingUrl && submitPermission && submitApproved
+        && (!inlineDocument || (submitBinding || binding).prompt === true)) {
+      try {
+        const [attempt] = await chrome.scripting.executeScript({
+          target, func: (url, token) => globalThis.yubiKeyFillField?.submit(url, token), args: [tab.url, marker],
+        });
+        submitted = attempt?.result === true;
+      } catch { /* A website may already be navigating after handling the code. */ }
+    }
+    const message = submitted ? "Code filled and submission requested." : "Code filled. Submit on the page if needed.";
     await status(tabId, "OK", message);
     return { ok: true, message };
   } catch (error) {

@@ -7,7 +7,9 @@ import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "yubikey-automatic-test-"));
-const extension = path.resolve("extension");
+const baseline = process.argv.includes("--baseline");
+const extension = path.resolve(baseline ? ".artifacts/latency-baseline/extension" : "extension");
+const latency = { cached: [], coldGroupMs: 0 };
 const id = createHash("sha256").update(Buffer.from(extension, "utf16le")).digest("hex").slice(0,32).replace(/./g,c=>String.fromCharCode(97+parseInt(c,16)));
 const browser = spawn("C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe", [
   "--headless=new","--remote-debugging-port=0","--enable-unsafe-extension-debugging",
@@ -66,6 +68,7 @@ try {
   await until(()=>evaluate(worker,'typeof chrome!=="undefined" && chrome.runtime?.id'),"No runtime");
   await evaluate(worker, '(async()=>{await chrome.storage.local.clear();await chrome.storage.session.clear();globalThis.codes=0;globalThis.previews=0;chrome.runtime.sendNativeMessage=async(_host,request)=>{if(request.op==="discover")return {ok:true,accounts:[{device:"dummy",id:"ab",label:"Amazon · demo",touchRequired:false},{device:"dummy",id:"cd",label:"NVIDIA · demo",touchRequired:false},{device:"dummy",id:"ef",label:"eBay",touchRequired:false}]};if(request.op==="preview"){previews++;return {ok:true,code:previews%2?"123456":"654321",startsAt:Date.now()-29350,expiresAt:Date.now()+650};}codes++;return {ok:true,code:"012345",expiresAt:Date.now()+25000};};})()');
   await evaluate(worker, '(async () => { const getWindow = chrome.windows.get; globalThis.backgroundWindow = true; chrome.windows.get = async (...args) => ({ ...await getWindow(...args), focused: !backgroundWindow }); })()');
+  await evaluate(worker, '(()=>{const native=chrome.runtime.sendNativeMessage;globalThis.discoveryDelay=0;globalThis.discoveryCalls=0;chrome.runtime.sendNativeMessage=async(...args)=>{if(args[1].op==="discover"){discoveryCalls++;globalThis.discoveryStarted=Date.now();if(discoveryDelay)await new Promise(resolve=>setTimeout(resolve,discoveryDelay));}return native(...args);};})()');
   page=await connect((await targets()).find(t=>t.type==="page").webSocketDebuggerUrl);
   await page.call("Page.bringToFront");
   await page.call("Emulation.setFocusEmulationEnabled",{enabled:true});
@@ -76,7 +79,7 @@ try {
   await page.call("Fetch.enable",{patterns:[{urlPattern:"*"}]});
   async function visit(url,markup) {
     await page.call("Input.dispatchMouseEvent",{type:"mouseMoved",x:0,y:0});
-    html="<!doctype html><meta charset=utf-8>"+markup;
+    html='<!doctype html><meta charset=utf-8><script>globalThis.submitCount=0;document.addEventListener("submit",event=>{event.preventDefault();submitCount++;},true);</script>'+markup;
     await page.call("Page.navigate",{url});
     await until(()=>evaluate(page,'document.readyState==="complete" && location.href==='+JSON.stringify(url)),"No fixture");
   }
@@ -147,15 +150,17 @@ try {
   for(const [url,markup,hoverIndex = 0] of [
     ["https://www.amazon.com/ap/mfa",'<form action="/verify"><h1>Two-Step Verification</h1><input id="auth-mfa-otpcode" name="otpCode" type="tel"></form>'],
     ["https://login.nvgs.nvidia.com/v1/security/challenge",'<form action="/verify"><h1>Security Challenge</h1><p>Launch your authentication app and generate a security code.</p><label for="code">Enter code</label><input id="code" placeholder="Please enter code"></form>'],
-    ["https://accounts.ebay.ch/mfaxs/signin",'<input type="hidden"><h1>Sicherheitscode eingeben</h1><div id="pin-boxes" role="group" aria-label="Sicherheitscode">'+Array.from({length:6},(_,i)=>'<input id="pin-box-'+i+'" name="pin-box-'+i+'" type="tel" maxlength="6" autocomplete="off" style="width:36px">').join('')+'</div><script>document.querySelector("#pin-boxes").addEventListener("input",event=>{const next=event.target.nextElementSibling;if(next&&event.target.value.length===1)next.focus();});</script>',4],
-    ["https://www.amazon.de/ap/mfa",'<h1>Bestätigung</h1><input autocomplete="one-time-code">']
+    ["https://accounts.ebay.ch/mfaxs/signin",'<input type="hidden"><h1>Sicherheitscode eingeben</h1><div id="pin-boxes" role="group" aria-label="Sicherheitscode">'+Array.from({length:6},(_,i)=>'<input id="pin-box-'+i+'" name="pin-box-'+i+'" type="tel" maxlength="6" autocomplete="off" style="width:36px">').join('')+'</div><script>document.querySelector("#pin-boxes").addEventListener("input",event=>{const next=event.target.nextElementSibling;if(next&&event.target.value.length===1)next.focus();const fields=[...document.querySelectorAll("#pin-boxes input")];if(fields.every(input=>input.value.length===1)){submitCount++;fields.forEach(input=>input.disabled=true);}});</script>',4],
+    ["https://www.amazon.de/ap/mfa",'<h1>Bestätigung</h1><input autocomplete="one-time-code"><script>document.querySelector("input").addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();submitCount++;}});</script>']
   ]){
     if (hoverIndex) await evaluate(worker, "backgroundWindow = false");
     const previewsBefore = await evaluate(worker, "previews");
     await visit(url,markup);
     await pause(400);
     assert.equal(await findButton(), undefined, "Card appeared before hovering");
+    const hoverStarted = performance.now();
     const button=await until(() => hoveredButton(hoverIndex),"No automatic offer for "+url);
+    latency.cached.push({host:new URL(url).hostname,ms:Math.round(performance.now()-hoverStarted)});
     if (hoverIndex) await until(async () => await evaluate(worker, "previews") > previewsBefore, "Later digit did not authorize a hover preview");
     const before=await evaluate(worker,"codes");
     const {object}=await page.call("DOM.resolveNode",{backendNodeId:button.backendNodeId});
@@ -166,11 +171,30 @@ try {
     await clickButton(button);
     await until(()=>evaluate(page,'[...document.querySelectorAll("input:not([type=hidden])")].map(input=>input.value).join("")==="012345"'),"Click failed to fill");
     assert.equal(await evaluate(worker,"codes"),before+1);
+    if (!baseline) {
+      await until(() => evaluate(page, "submitCount === 1"), "The filled OTP form/widget was not submitted");
+      await pause(80);
+      assert.equal(await evaluate(page, "submitCount"), 1, "The website received a duplicate submission");
+    }
     await evaluate(worker, "backgroundWindow = true");
     await page.call("Page.reload");
     await until(() => hoveredButton(hoverIndex), "Offer disappeared after refreshing the login page");
     assert.equal(await evaluate(worker,"codes"),before+1,"Refresh generated a code");
   }
+  await evaluate(worker, '(async()=>{await chrome.storage.local.clear();await chrome.storage.session.clear();discoveryDelay=500;discoveryCalls=0;backgroundWindow=true;})()');
+  await visit("https://accounts.ebay.ch/mfaxs/signin", '<div id="pin-boxes" role="group">'+Array.from({length:6},(_,index)=>'<input type="tel" maxlength="6" id="pin-box-'+index+'" style="width:36px">').join("")+"</div>");
+  const coldStarted = performance.now();
+  let lastPointerAt;
+  for (let index=0;index<6;index++) {
+    await hoveredButton(index);
+    lastPointerAt = Date.now();
+    await pause(60);
+  }
+  await until(findButton, "No offer after moving across a cold OTP group");
+  latency.coldGroupMs = Math.round(performance.now()-coldStarted);
+  assert.equal(await evaluate(worker, "discoveryCalls"), 1, "Group movement repeated account discovery");
+  if (!baseline) assert.ok(await evaluate(worker, "discoveryStarted") < lastPointerAt, "Discovery did not overlap the hover interval");
+  await evaluate(worker, "discoveryDelay=0");
   await visit("https://login.nvgs.nvidia.com/v1/nfactor/totp-auth",
     '<style>.concealed { display: none; }</style><h1>Security Challenge</h1><label for="code_input">Enter code</label><input id="code_input" class="concealed" autocomplete="one-time-code">');
   await until(() => evaluate(page, 'document.documentElement.dataset.yubikeyFillState === "watching"'),
@@ -241,6 +265,9 @@ try {
   await visit("https://www.amazon.com.attacker.test/login",'<input autocomplete="one-time-code">');
   await pause(300);
   assert.equal(await findButton(),undefined,"Lookalike received offer");
+  fs.mkdirSync(path.resolve(".artifacts"),{recursive:true});
+  fs.writeFileSync(path.resolve(baseline ? ".artifacts/latency-baseline.json" : ".artifacts/latency-current.json"),JSON.stringify(latency,null,2));
+  console.log("Offer latency (fixture includes 500 ms cold discovery):",JSON.stringify(latency));
   console.log("Hover-only offers, timed preview refresh, hover-out cleanup, safe fill and login regressions passed.");
 } finally {
   page?.close();worker?.close();

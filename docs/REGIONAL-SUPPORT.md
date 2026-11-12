@@ -16,7 +16,7 @@ The detector supports standard OTP autocomplete, recognized field names, existin
 
 All boxes must be visible, enabled, empty and associated with the same form (or all have no form). Same-origin form actions and submit overrides remain checked. The one-use fill token captures every original input in order. The returned code must have the exact group length. Each digit uses the native input setter and dispatches an input event; all identities, values, current URL, expiry and destinations are checked again before the next digit. A page that replaces a later box or changes its destination stops further filling. A stopped fill may leave the already-entered prefix for the user to clear.
 
-The extension does not submit forms. A website may automatically verify after its own input handlers receive the complete code. Tests use dummy credentials and prevent live login attempts.
+In v0.7.4, form submission remained with the website/user. From v0.7.6, the trusted **Fill & submit** action also requests submission of the same verified form, or sends Enter events to a form-less widget. Sites can also verify automatically in their own input handlers. See [submission safeguards](SUBMISSION-AND-LATENCY.md). Tests use dummy credentials and intercept submissions to prevent live login attempts.
 
 ## Validation
 

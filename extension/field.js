@@ -3,6 +3,8 @@
   const version = globalThis.chrome?.runtime?.getManifest?.().version || "test";
   if (globalThis.yubiKeyFillField?.version === version) return;
   let pending;
+  let completed;
+  let completionGeneration = 0;
   let clicked;
   let hovered, hoverHost;
   const selector = [
@@ -87,7 +89,31 @@
     return selection()?.[0] || null;
   }
 
+  function clearCompleted() {
+    completionGeneration++;
+    if (!completed) return;
+    clearTimeout(completed.timer);
+    if (completed.form) EventTarget.prototype.removeEventListener.call(completed.form, "submit", completed.onSubmit, true);
+    completed = null;
+  }
+
+  function defaultSubmitter(form) {
+    return [...document.querySelectorAll('button, input[type="submit"], input[type="image"]')]
+      .find(button => button.form === form && ["submit", "image"].includes(button.type));
+  }
+
+  function submitSignature(form, button) {
+    const attr = Element.prototype.getAttribute;
+    return JSON.stringify([
+      new URL(attr.call(form, "action") || location.href, document.baseURI || location.href).href,
+      ...["method", "target", "enctype", "novalidate"].map(name => attr.call(form, name)),
+      button && ["formaction", "formmethod", "formtarget", "formenctype", "formnovalidate"]
+        .map(name => attr.call(button, name)),
+    ]);
+  }
+
   function probe(url, marker, inline) {
+    clearCompleted();
     const anchor = clicked;
     clicked = null;
     pending = null;
@@ -98,6 +124,7 @@
   }
 
   function fill(url, marker, code, expiresAt) {
+    clearCompleted();
     const original = pending;
     pending = null;
     const inputs = location.href === url && selection();
@@ -108,6 +135,16 @@
         || (inputs.length > 1 && inputs.length !== code.length)
         || (inputs.length === 1 && inputs[0].maxLength >= 0 && inputs[0].maxLength < code.length)) return false;
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    const record = { marker, inputs, url, expiresAt, form: inputs[0].form || null,
+      generation: completionGeneration, submitted: false };
+    if (record.form) {
+      record.submitter = defaultSubmitter(record.form);
+      record.signature = submitSignature(record.form, record.submitter);
+    }
+    record.onSubmit = event => { if (event.target === record.form) record.submitted = true; };
+    if (record.form) EventTarget.prototype.addEventListener.call(record.form, "submit", record.onSubmit, true);
+    completed = record;
+    record.timer = setTimeout(clearCompleted, 1500);
     for (let index = 0; index < inputs.length; index++) {
       // Page input handlers can replace controls or change the destination.
       // Revalidate all identities, destinations and expected values before
@@ -115,16 +152,72 @@
       const current = location.href === url && selection(true);
       if (!current || Date.now() + 3000 >= expiresAt || current.length !== inputs.length
           || !current.every((input, offset) => input === inputs[offset]
-            && input.value === (offset < index ? code[offset] : ""))) return false;
+            && input.value === (offset < index ? code[offset] : ""))) {
+        clearCompleted();
+        return false;
+      }
       setter.call(inputs[index], inputs.length === 1 ? code : code[index]);
       inputs[index].dispatchEvent(new Event("input", { bubbles: true }));
     }
+    record.values = inputs.map((_input, index) => inputs.length === 1 ? code : code[index]);
     return true;
+  }
+
+  async function submit(url, marker) {
+    const record = completed;
+    if (!record || record.marker !== marker || record.url !== url) return false;
+    completed = null; // Consume this authorization before any page event runs.
+    clearTimeout(record.timer);
+    try {
+      // Let input handlers/microtasks finish; a background tab cannot defer an
+      // authorization indefinitely. This is one bounded wait, not polling.
+      await new Promise(resolve => {
+        const timer = setTimeout(resolve, 50);
+        requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
+      });
+      if (record.generation !== completionGeneration || location.href !== url
+          || document.visibilityState !== "visible" || !document.hasFocus()
+          || Date.now() + 3000 >= record.expiresAt) return false;
+      if (record.submitted) return true; // The website already submitted on input.
+      const current = selection(true);
+      if (!current || current.length !== record.inputs.length
+          || !current.every((input, index) => input === record.inputs[index]
+            && input.value === record.values[index] && input.form === record.inputs[0].form)
+          || (current[0].form || null) !== record.form) return false;
+      const input = current.at(-1);
+      input.focus({preventScroll:true});
+      if (record.generation !== completionGeneration || Date.now() + 3000 >= record.expiresAt) return false;
+      if (record.submitted) return true;
+      const focused = location.href === url && document.hasFocus() && selection(true);
+      if (!focused || (focused[0].form || null) !== record.form
+          || focused.length !== current.length || !focused.every((node, index) =>
+        node === current[index] && node.value === record.values[index])) return false;
+      if (record.form) {
+        const button = defaultSubmitter(record.form);
+        if (button !== record.submitter || submitSignature(record.form, button) !== record.signature) return false;
+        if (button && (button.matches(":disabled") || button.getAttribute("aria-disabled") === "true"
+            || !button.getClientRects().length
+            || button.checkVisibility?.({checkOpacity:true,checkVisibilityCSS:true}) === false)) return false;
+        // Use the native method; named controls can shadow form.requestSubmit.
+        HTMLFormElement.prototype.requestSubmit.call(record.form, button);
+        return record.submitted;
+      }
+      // Form-less widgets may implement their own Enter handler. Synthetic
+      // keys have no native submit default; never send a global OS keystroke.
+      for (const type of ["keydown", "keyup"]) {
+        if (location.href !== url || !document.hasFocus()) break;
+        input.dispatchEvent(new KeyboardEvent(type, {key:"Enter",code:"Enter",keyCode:13,which:13,
+          bubbles:true,cancelable:true,composed:true}));
+      }
+      return true;
+    } finally {
+      if (record.form) EventTarget.prototype.removeEventListener.call(record.form, "submit", record.onSubmit, true);
+    }
   }
 
   globalThis.yubiKeyFillField = {
     version,
-    field, probe, fill,
+    field, probe, fill, submit,
     fieldFor(input) { const inputs = selection(); return inputs?.includes(input) ? inputs[0] : null; },
     isHovered() { return Boolean(selection()?.some(input => input.matches(":hover"))); },
     markClick(input) { clicked = input; },

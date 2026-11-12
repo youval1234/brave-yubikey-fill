@@ -106,6 +106,11 @@ function reset() {
         if (files) return [{ documentId: "original-document" }];
         if (args.length === 4) {
           events.push(["fill", target.documentIds, args[2]]);
+          state.afterFill?.();
+          return [{ result: true }];
+        }
+        if (args.length === 2) {
+          events.push(["submit", target.documentIds]);
           return [{ result: true }];
         }
         events.push(["probe", target.documentIds]);
@@ -225,6 +230,7 @@ test("only requests the approved credential and targets the original document", 
     ["probe", ["original-document"]],
     ["request", { op: "code", device: binding.device, id: binding.id }],
     ["fill", ["original-document"], code],
+    ["submit", ["original-document"]],
   ]);
 });
 
@@ -355,7 +361,7 @@ test("inline fill keeps codes out of replies and blocks revocation before or dur
   reset();
   state.binding = { ...binding, prompt: true };
   const reply = await handlePrompt({ kind: "prompt-fill", id: "attacker-chosen" }, sender);
-  assert.deepEqual(reply, { ok: true, message: "Code filled. Review the form and submit." });
+  assert.deepEqual(reply, { ok: true, message: "Code filled and submission requested." });
   assert.deepEqual(events.find(([type]) => type === "request")[1], {
     op: "code", device: binding.device, id: binding.id,
   });
@@ -414,7 +420,22 @@ class Input {
   matches() { return false; }
   closest() { return null; }
   getClientRects() { return [{}]; }
+  getAttribute(name) { return this.attributes?.[name] || null; }
+  focus() { document.activeElement = this; }
   dispatchEvent(event) { this.events.push(event.type); }
+}
+
+class Form extends EventTarget {
+  constructor() {
+    super();
+    this.attributes = { action: "/verify", method: "post" };
+    this.submissions = 0;
+  }
+  requestSubmit(button) {
+    this.submissions++;
+    this.submitter = button;
+    this.dispatchEvent(new Event("submit", {cancelable:true}));
+  }
 }
 
 function setupPage() {
@@ -423,14 +444,21 @@ function setupPage() {
   globalThis.window = {};
   window.top = window;
   globalThis.HTMLInputElement = Input;
+  globalThis.HTMLFormElement = Form;
+  globalThis.requestAnimationFrame = callback => setTimeout(callback, 0);
+  globalThis.KeyboardEvent = class extends Event {
+    constructor(type, options) { super(type, options); this.key = options.key; this.code = options.code; }
+  };
   globalThis.Element = class {
     getAttribute(name) { return this.attributes?.[name] || null; }
   };
   globalThis.getComputedStyle = () => ({ visibility: "visible" });
   globalThis.document = {
     visibilityState: "visible",
+    hasFocus: () => document.focused !== false,
     fields: [input],
-    querySelectorAll: (selector) => selector.startsWith("button") ? document.overrides || []
+    querySelectorAll: (selector) => selector.startsWith("button[") ? document.overrides || []
+      : selector.startsWith("button,") ? document.submitters || []
       : selector.startsWith('[role="group"]') ? document.groups || [] : document.fields,
   };
   return input;
@@ -494,7 +522,7 @@ test("split inputs reject partial values, mixed forms, ambiguous groups and repl
 test("split filling stops if an input handler changes the destination or replaces a later digit", () => {
   for (const change of ["destination", "replacement"]) {
     const { inputs } = setupSplit();
-    const form = { attributes: { action: "/verify" } };
+    const form = new Form();
     inputs.forEach(input => { input.form = form; });
     inputs[0].dispatchEvent = () => {
       if (change === "destination") form.attributes.action = "https://attacker.test/";
@@ -513,6 +541,76 @@ test("writes a dummy code and dispatches input without submitting", () => {
   assert.equal(fillField(tab.url, "gesture", code, Date.now() + 20_000), true);
   assert.equal(input.value, code);
   assert.deepEqual(input.events, ["input"]);
+});
+
+test("submission is one-use, stays on the filled form and bypasses named-control clobbering", async () => {
+  const input = setupPage(), form = new Form();
+  input.form = form;
+  form.requestSubmit = input;
+  assert.equal(probe(tab.url, "submit"), true);
+  assert.equal(fillField(tab.url, "submit", code, Date.now() + 20000), true);
+  assert.equal(form.submissions, 0);
+  assert.equal(await globalThis.yubiKeyFillField.submit(tab.url, "submit"), true);
+  assert.equal(form.submissions, 1);
+  assert.equal(await globalThis.yubiKeyFillField.submit(tab.url, "submit"), false);
+  assert.equal(form.submissions, 1);
+});
+
+test("no second submission follows a website's automatic input submission", async () => {
+  const input = setupPage(), form = new Form();
+  input.form = form;
+  input.dispatchEvent = () => Form.prototype.requestSubmit.call(form);
+  assert.equal(probe(tab.url, "auto"), true);
+  assert.equal(fillField(tab.url, "auto", code, Date.now() + 20000), true);
+  assert.equal(await globalThis.yubiKeyFillField.submit(tab.url, "auto"), true);
+  assert.equal(form.submissions, 1);
+});
+
+test("submission rejects changed destinations, controls, values, context and disabled submitters", async () => {
+  for (const change of ["origin", "path", "button", "field", "value", "focus", "url", "disabled", "focus-path", "focus-form"]) {
+    const input = setupPage(), form = new Form();
+    input.form = form;
+    const button = Object.assign(new Input(), {type:"submit", form});
+    document.submitters = [button];
+    assert.equal(probe(tab.url, "guard"), true);
+    assert.equal(fillField(tab.url, "guard", code, Date.now() + 20000), true);
+    if (change === "origin") form.attributes.action = "https://attacker.test/";
+    if (change === "path") form.attributes.action = "/different-action";
+    if (change === "button") document.submitters = [Object.assign(new Input(), {type:"submit", form})];
+    if (change === "field") document.fields = [Object.assign(new Input(), {form, value:code})];
+    if (change === "value") input.value = "999999";
+    if (change === "focus") document.focused = false;
+    if (change === "url") location = new URL(site + "/other");
+    if (change === "disabled") button.matches = () => true;
+    if (change === "focus-path") input.focus = () => { form.attributes.action = "/another-form-action"; };
+    if (change === "focus-form") input.focus = () => { input.form = new Form(); };
+    assert.equal(await globalThis.yubiKeyFillField.submit(tab.url, "guard"), false, change);
+    assert.equal(form.submissions, 0);
+  }
+});
+
+test("form-less widgets receive Enter on the last filled digit only", async () => {
+  const {inputs} = setupSplit();
+  assert.equal(probe(tab.url, "keys"), true);
+  assert.equal(fillField(tab.url, "keys", code, Date.now() + 20000), true);
+  assert.equal(await globalThis.yubiKeyFillField.submit(tab.url, "keys"), true);
+  assert.deepEqual(inputs[5].events, ["input", "keydown", "keyup"]);
+  assert.ok(inputs.slice(0,5).every(input => input.events.length === 1));
+});
+
+test("worker does not submit after permission, focus, navigation or approval changes during filling", async () => {
+  for (const change of [
+    () => { state.permitted = false; }, () => { state.focused = false; },
+    () => { state.current.url = site + "/other"; }, () => { state.binding = undefined; },
+  ]) {
+    reset();
+    state.binding = {...binding, prompt:true};
+    state.afterFill = change;
+    const result = await handlePrompt({kind:"prompt-fill"}, sender);
+    assert.equal(result.ok, true);
+    assert.ok(events.some(([kind]) => kind === "fill"));
+    assert.equal(events.some(([kind]) => kind === "submit"), false);
+  }
 });
 
 test("rejects an ambiguous field, an off-site form and a hidden document", () => {

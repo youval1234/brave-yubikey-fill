@@ -6,7 +6,7 @@ Hardware-backed OTP autofill for **Brave on Windows**. Your YubiKey calculates t
 
 ![Toolbar popup](docs/popup-preview.png)
 
-Hover over a supported code field to reveal the inline offer. See the code and time remaining, then click **Fill code**. Some websites verify automatically once all digits are entered; otherwise submit the form yourself. No per-site setup is needed for recognized providers with a unique matching account; multiple matches offer an account choice.
+Hover over a supported code field to reveal the inline offer. See the code and time remaining, then click **Fill & submit**. The extension fills the code and requests submission of the matched OTP form. Form-less widgets receive Enter events on their filled input. A changed, disabled or unsupported form can still need manual submission. No per-site setup is needed for recognized providers with a unique matching account; multiple matches offer an account choice.
 
 [Latest release](https://github.com/youval1234/brave-yubikey-fill/releases/latest) · [Privacy and security review](docs/SECURITY-REVIEW.md) · [Performance measurements](docs/PERFORMANCE.md)
 
@@ -33,7 +33,7 @@ Requirements: Windows x64, Brave, Python 3.14 x64 with Tk, Windows .NET Framewor
    ./Install.ps1 -ExtensionId YOUR_EXTENSION_ID
    ```
 
-4. Open a recognized HTTPS login page and hover over its OTP field. Click **Fill code** when offered. Touch or unlock the key if its existing policy requires it.
+4. Open a recognized HTTPS login page and hover over its OTP field. Click **Fill & submit** when offered. Touch or unlock the key if its existing policy requires it.
 
 For private windows, enable **Details → Allow in Private** once in Brave. The browser controls this permission.
 
@@ -41,7 +41,9 @@ Only one YubiKey may be connected for a read. Account metadata is cached for up 
 
 ## Updates
 
-Version **0.7.5** adds the MIT license to the project and both release packages, plus hardening of the development test helpers. OTP behavior and the native helper are unchanged.
+Version **0.7.6** adds automatic submission after a successful trusted-click fill, a shorter 120 ms hover delay and discovery that overlaps the delay. Moving between digit boxes does not restart the group's timer. The page watcher starts at DOM readiness; it still does no idle scanning or USB polling. See [submission and latency checks](docs/SUBMISSION-AND-LATENCY.md). No helper reinstall or new permissions are required.
+
+Version 0.7.5 added the MIT license to the project and both release packages, plus hardening of the development test helpers.
 
 Version 0.7.4 added regional marketplace matching and grouped digit boxes, including eBay's six-box layout. It uses the same helper as v0.7.3; no helper reinstall is needed for this update. See [regional support](docs/REGIONAL-SUPPORT.md).
 
